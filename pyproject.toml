@@ -1,0 +1,83 @@
+[project]
+name = "refhound"
+version = "0.1.0"
+description = "Git repository security and forensic analysis tool"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Michael Weiss" }]
+keywords = ["git", "security", "forensics", "secret-scanning", "audit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.6",
+    "sqlalchemy>=2.0",
+    "platformdirs>=4.2",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+graph = ["networkx>=3.2"]
+docs = ["sphinx>=7.0", "sphinx-rtd-theme>=2.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+refhound = "refhound.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/refhound"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "S", "SIM", "RUF"]
+ignore = [
+    "S101",  # assert allowed in tests
+    "S603",  # subprocess use is central to this tool; wrapped in GitRunner
+    "S607",  # do not use `which`-style path detection beyond bundled resolver
+    "E501",  # handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*" = ["S105", "S106", "S107", "S108"]
+"src/refhound/cli.py" = ["S106", "S107"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+show_error_codes = true
+exclude = ["tests/fixtures", "docs"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disable_error_code = ["attr-defined", "union-attr"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+filterwarnings = ["error"]
