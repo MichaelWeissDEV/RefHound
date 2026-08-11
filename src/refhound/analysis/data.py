@@ -57,9 +57,12 @@ class AnalysisData:
     ref_transitions: list[RefTransition] = field(default_factory=list)
     scan_id: str = ""
     scan_timestamp: str = ""
+    cached_statistics: RepositoryStatistics | None = None
 
     @property
     def statistics(self) -> RepositoryStatistics:
+        if self.cached_statistics is not None:
+            return self.cached_statistics
         return RepositoryStatistics(
             total_commits=len(self.commit_graph),
             reachable_commits=len(self.reachable_oids),

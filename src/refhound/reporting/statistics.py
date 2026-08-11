@@ -8,6 +8,8 @@ from refhound.models.statistics import RepositoryStatistics
 
 def compute_statistics(data: AnalysisData) -> RepositoryStatistics:
     """Aggregate repository-wide statistics from analysis data."""
+    if data.cached_statistics is not None:
+        return data.cached_statistics
     commits = list(data.commit_graph.values())
     first = min((c.committer_date for c in commits if c.committer_date), default=None)
     last = max((c.committer_date for c in commits if c.committer_date), default=None)

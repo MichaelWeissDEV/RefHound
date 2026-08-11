@@ -7,6 +7,23 @@ Local paths are analysed in place; URLs are mirrored into a cache.
 Every command also supports ``-v`` (``-v``/``-vv``/``-vvv``) for more
 logging. ``refhound --version`` prints the installed version.
 
+Scan result cache
+-----------------
+
+Successful scans are stored in RefHound's local SQLite database. The
+``findings``, ``secrets``, ``lost``, ``stats``, ``objects``, ``dangling``,
+``unreachable``, ``refs`` and ``report`` commands reuse the latest result
+when the repository refs and scan configuration have not changed. Cached secrets
+contain only fingerprints, prefixes and suffixes; complete secret values are
+never persisted.
+
+Use ``--fresh`` with ``findings``, ``secrets`` or ``report`` to force a new
+scan. Passing ``-v`` to any cache-backed command also refreshes the result.
+The ``scan`` command always runs the pipeline and writes a new snapshot.
+Commands that need the complete commit graph (for example ``commits``,
+``authors``, ``timeline``, ``interesting``, ``history`` and ``explain``)
+continue to scan directly.
+
 Global exit codes
 -----------------
 
@@ -78,6 +95,7 @@ Options:
 * ``--category CATEGORY`` - filter by category.
 * ``--score-min N`` - minimum score.
 * ``--json`` - JSON output.
+* ``--fresh`` - ignore the cached result and run a new scan.
 
 secrets
 -------
@@ -94,6 +112,7 @@ Options:
 * ``--historical`` - only secrets introduced and later removed.
 * ``--unreachable`` - only secrets found in unreachable/lost objects.
 * ``--json`` - JSON output.
+* ``--fresh`` - ignore the cached result and run a new scan.
 
 refs
 ----
@@ -263,6 +282,7 @@ Options:
 * ``--format markdown|json|sarif`` - report format (default ``markdown``).
 * ``--output, -o FILE`` - output file path.
 * ``--deep`` - include deep analysis.
+* ``--fresh`` - ignore the cached result and run a new scan.
 
 diff-scan
 ---------

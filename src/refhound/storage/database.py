@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from platformdirs import user_data_dir
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from refhound.storage import schema
@@ -32,6 +32,7 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{self.path}", future=True)
         schema.Base.metadata.create_all(self.engine)
+        self._migrate()
         self._session_factory = sessionmaker(
             bind=self.engine, expire_on_commit=False, class_=Session
         )
@@ -43,6 +44,13 @@ class Database:
         """Dispose the engine, releasing the underlying sqlite connection."""
         self.engine.dispose()
 
+    def _migrate(self) -> None:
+        """Apply small, idempotent migrations for databases from older releases."""
+        columns = {column["name"] for column in inspect(self.engine).get_columns("scans")}
+        if "snapshot_json" not in columns:
+            with self.engine.begin() as connection:
+                connection.execute(text("ALTER TABLE scans ADD COLUMN snapshot_json TEXT"))
+
     def store_scan(
         self,
         *,
@@ -51,6 +59,10 @@ class Database:
         refs: list[dict[str, Any]],
         commits: int,
         findings: list[dict[str, Any]] | None = None,
+        snapshot: dict[str, Any] | None = None,
+        secrets: list[dict[str, Any]] | None = None,
+        statistics: dict[str, Any] | None = None,
+        profile: str = "standard",
     ) -> None:
         """Persist a scan snapshot and its ref state."""
         with self.session() as session:
@@ -68,7 +80,9 @@ class Database:
                 repository_id=repository_row.id,
                 scan_id=scan_id,
                 commit_count=commits,
+                profile=profile,
                 findings_json=json.dumps(findings or [], indent=None) if findings else None,
+                snapshot_json=json.dumps(snapshot, separators=(",", ":")) if snapshot else None,
             )
             session.add(scan)
             for ref in refs:
@@ -80,7 +94,67 @@ class Database:
                         source=ref.get("source", "local"),
                     )
                 )
+            for finding in findings or []:
+                session.add(
+                    schema.FindingRecord(
+                        scan_id=scan_id,
+                        finding_id=finding.get("id", ""),
+                        category=finding.get("category", ""),
+                        severity=finding.get("severity", "info"),
+                        score=finding.get("score", 0),
+                        path=finding.get("path"),
+                        commit_sha=finding.get("commit_sha"),
+                    )
+                )
+            for secret in secrets or []:
+                session.add(
+                    schema.SecretRecordRow(
+                        scan_id=scan_id,
+                        fingerprint=secret.get("fingerprint", ""),
+                        detector=secret.get("detector", ""),
+                        prefix=secret.get("prefix", ""),
+                        suffix=secret.get("suffix", ""),
+                        current=secret.get("current", False),
+                        historical=secret.get("historical", False),
+                        unreachable=secret.get("unreachable", False),
+                    )
+                )
+            if statistics is not None:
+                session.add(
+                    schema.StatisticsRecord(
+                        scan_id=scan_id,
+                        total_commits=statistics.get("total_commits", 0),
+                        unreachable_commits=statistics.get("unreachable_commits", 0),
+                        branches=statistics.get("branches", 0),
+                        tags=statistics.get("tags", 0),
+                        authors=statistics.get("authors", 0),
+                    )
+                )
             session.commit()
+
+    def latest_snapshot(self, repository: str) -> dict[str, Any] | None:
+        """Return the newest complete result snapshot for a repository."""
+        with self.session() as session:
+            repository_row = (
+                session.query(schema.RepositoryRecord)
+                .filter(schema.RepositoryRecord.path == repository)
+                .first()
+            )
+            if repository_row is None:
+                return None
+            scan = (
+                session.query(schema.ScanRecord)
+                .filter(schema.ScanRecord.repository_id == repository_row.id)
+                .order_by(schema.ScanRecord.id.desc())
+                .first()
+            )
+            if scan is None or not scan.snapshot_json:
+                return None
+            try:
+                value = json.loads(scan.snapshot_json)
+            except (json.JSONDecodeError, TypeError):
+                return None
+            return value if isinstance(value, dict) else None
 
     def latest_ref_snapshot(self, repository: str) -> dict[str, str] | None:
         """Ref-state map (ref -> oid) of the most recent scan, if any."""

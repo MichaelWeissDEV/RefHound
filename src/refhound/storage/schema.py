@@ -42,6 +42,7 @@ class ScanRecord(Base):
     profile: Mapped[str] = mapped_column(String(32), default="standard")
     started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     findings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ScanRefRecord(Base):

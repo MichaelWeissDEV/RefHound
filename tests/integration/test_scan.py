@@ -9,6 +9,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from refhound.config import PROFILES, ScanOptions
 from refhound.models.finding import SourceState
 from refhound.reporting import json as json_ui
@@ -153,18 +155,97 @@ def test_db_never_stores_full_secret(repo: tuple[Path, object], tmp_path: Path) 
             scan_id=result.data.scan_id,
             refs=[r.model_dump(mode="json") for r in result.data.refs],
             commits=len(result.data.commit_graph),
+            findings=[f.model_dump(mode="json") for f in result.data.findings],
+            snapshot={
+                "findings": [f.model_dump(mode="json") for f in result.data.findings],
+                "secrets": [s.model_dump(mode="json") for s in result.data.secrets],
+            },
+            secrets=[s.model_dump(mode="json") for s in result.data.secrets],
         )
         conn = sqlite3.connect(db_path)
         try:
             rows = conn.execute(
-                "SELECT findings_json FROM scans WHERE scan_id=?", (result.data.scan_id,)
+                "SELECT findings_json, snapshot_json FROM scans WHERE scan_id=?",
+                (result.data.scan_id,),
+            ).fetchall()
+            secret_rows = conn.execute(
+                "SELECT fingerprint, prefix, suffix FROM secret_fingerprints WHERE scan_id=?",
+                (result.data.scan_id,),
             ).fetchall()
         finally:
             conn.close()
         assert rows, "scan row should exist"
-        assert TOKEN not in (rows[0][0] or "")
+        assert secret_rows, "redacted secret rows should be stored"
+        assert TOKEN not in json.dumps([rows, secret_rows])
     finally:
         db.close()
+
+
+def test_database_migrates_snapshot_column(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """CREATE TABLE scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id INTEGER NOT NULL,
+                scan_id VARCHAR(32) NOT NULL,
+                commit_count INTEGER NOT NULL DEFAULT 0,
+                profile VARCHAR(32) NOT NULL DEFAULT 'standard',
+                started_at DATETIME NOT NULL,
+                findings_json TEXT
+            )"""
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from refhound.storage.database import Database
+
+    db = Database(db_path)
+    db.close()
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(scans)")}
+    finally:
+        conn.close()
+    assert "snapshot_json" in columns
+
+
+def test_cached_scan_refreshes_on_refs_and_fresh(
+    repo: tuple[Path, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, git = repo
+    db_path = tmp_path / "cache.db"
+    from refhound import cli
+
+    monkeypatch.setattr(cli, "default_db_path", lambda: db_path)
+    first = cli._load_or_scan(str(path))
+
+    calls = 0
+    original_run = Engine.run
+
+    def tracked_run(engine: Engine, target: str) -> object:
+        nonlocal calls
+        calls += 1
+        return original_run(engine, target)
+
+    monkeypatch.setattr(Engine, "run", tracked_run)
+    cached = cli._load_or_scan(str(path))
+    assert calls == 0
+    assert [f.model_dump() for f in cached.data.findings] == [
+        f.model_dump() for f in first.data.findings
+    ]
+
+    (path / "README.md").write_text("# Demo\nchanged\n", encoding="utf-8")
+    git("add", "README.md")  # type: ignore[operator]
+    git("commit", "-q", "-m", "change refs")  # type: ignore[operator]
+    refreshed = cli._load_or_scan(str(path))
+    assert calls == 1
+    assert refreshed.data.scan_id != first.data.scan_id
+
+    cli._load_or_scan(str(path), fresh=True)
+    assert calls == 2
 
 
 def test_ignore_paths_suppress_secret_findings(repo: tuple[Path, object]) -> None:

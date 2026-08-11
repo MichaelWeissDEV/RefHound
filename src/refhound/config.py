@@ -12,7 +12,8 @@ Secrets are never stored in configuration files.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -107,14 +108,18 @@ class ScanOptions:
 
     def hash(self) -> str:
         """Stable configuration fingerprint for report reproducibility."""
-        payload = "\n".join(
-            [
-                self.profile.name,
-                str(self.max_blob_size),
-                str(self.jobs),
-                str(self.fail_on or ""),
-                str(self.include_vendor),
-            ]
+        payload = json.dumps(
+            {
+                "profile": asdict(self.profile),
+                "max_blob_size": self.max_blob_size,
+                "jobs": self.jobs,
+                "fetch_lfs": self.fetch_lfs,
+                "unshallow": self.unshallow,
+                "include_vendor": self.include_vendor,
+                "ignore": asdict(self.ignore),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 

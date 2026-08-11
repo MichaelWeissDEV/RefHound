@@ -16,6 +16,7 @@ import sys
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -35,7 +36,9 @@ from refhound.errors import (
 )
 from refhound.models.commit import CommitInfo
 from refhound.models.finding import Finding, FindingCategory, SecretRecord, Severity, SourceState
-from refhound.models.object import LostCommitChain
+from refhound.models.object import DanglingObject, LostCommitChain
+from refhound.models.repository import RepoRef, RepositoryInfo
+from refhound.models.statistics import ObjectStats, RepositoryStatistics
 from refhound.reporting import console as console_ui
 from refhound.reporting import json as json_ui
 from refhound.reporting import markdown as markdown_ui
@@ -194,11 +197,77 @@ def _store_scan(db: Database | None, repository: str, result: ScanResult) -> Non
     if db is None:
         return
     refs = [r.model_dump(mode="json") for r in result.data.refs]
+    findings = [f.model_dump(mode="json") for f in result.data.findings]
+    secrets = [s.model_dump(mode="json") for s in result.data.secrets]
+    statistics = compute_statistics(result.data).model_dump(mode="json")
     db.store_scan(
         repository=repository,
         scan_id=result.data.scan_id,
         refs=refs,
         commits=len(result.data.commit_graph),
+        findings=findings,
+        snapshot=_snapshot(result, statistics),
+        secrets=secrets,
+        statistics=statistics,
+        profile=result.options.profile.name,
+    )
+
+
+def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
+    """Build the redacted, report-ready representation stored in SQLite."""
+    data = result.data
+    return {
+        "schema_version": 1,
+        "scan_id": data.scan_id,
+        "scan_timestamp": data.scan_timestamp,
+        "profile": result.options.profile.name,
+        "configuration_hash": result.options.hash(),
+        "repository": result.repository,
+        "repo": data.repo.model_dump(mode="json") if data.repo else None,
+        "findings": [f.model_dump(mode="json") for f in data.findings],
+        "secrets": [s.model_dump(mode="json") for s in data.secrets],
+        "lost_chains": [c.model_dump(mode="json") for c in data.lost_chains],
+        "dangling": [d.model_dump(mode="json") for d in data.dangling],
+        "unreachable_oids": sorted(data.unreachable_oids),
+        "reachable_oids": sorted(data.reachable_oids),
+        "refs": [r.model_dump(mode="json") for r in data.refs],
+        "object_stats": data.object_stats.model_dump(mode="json"),
+        "statistics": statistics,
+        "deleted_files": list(data.deleted_files),
+        "scan_warnings": list(data.scan_warnings),
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> ScanResult:
+    """Validate and reconstruct report-ready analysis data from a DB snapshot."""
+    if snapshot.get("schema_version") != 1:
+        raise ValueError("unsupported snapshot schema")
+    data = AnalysisData(
+        repo=(RepositoryInfo.model_validate(snapshot["repo"]) if snapshot.get("repo") else None),
+        refs=[RepoRef.model_validate(value) for value in snapshot.get("refs", [])],
+        reachable_oids=set(snapshot.get("reachable_oids", [])),
+        unreachable_oids=set(snapshot.get("unreachable_oids", [])),
+        dangling=[DanglingObject.model_validate(value) for value in snapshot.get("dangling", [])],
+        object_stats=ObjectStats.model_validate(snapshot.get("object_stats", {})),
+        secrets=[SecretRecord.model_validate(value) for value in snapshot.get("secrets", [])],
+        lost_chains=[
+            LostCommitChain.model_validate(value) for value in snapshot.get("lost_chains", [])
+        ],
+        deleted_files=list(snapshot.get("deleted_files", [])),
+        findings=[Finding.model_validate(value) for value in snapshot.get("findings", [])],
+        scan_warnings=list(snapshot.get("scan_warnings", [])),
+        scan_id=str(snapshot["scan_id"]),
+        scan_timestamp=str(snapshot["scan_timestamp"]),
+        cached_statistics=RepositoryStatistics.model_validate(snapshot["statistics"]),
+    )
+    started = datetime.fromisoformat(data.scan_timestamp)
+    return ScanResult(
+        data=data,
+        options=options,
+        started=started,
+        duration_seconds=float(snapshot.get("duration_seconds", 0.0)),
+        repository=str(snapshot.get("repository", "")),
     )
 
 
@@ -228,7 +297,87 @@ def _is_remote(target: str) -> bool:
 
 
 def _repository_key(target: str) -> str:
-    return target
+    if _is_remote(target):
+        return target
+    from refhound.git.command import GitRunner
+
+    path = Path(target).expanduser().resolve()
+    git = GitRunner()
+    try:
+        root = git.run("rev-parse", "--show-toplevel", cwd=path).stdout.strip()
+        if root:
+            return str(Path(root).resolve())
+    except RefHoundError:
+        pass
+    try:
+        git_dir = git.run("rev-parse", "--absolute-git-dir", cwd=path).stdout.strip()
+        if git_dir:
+            return str(Path(git_dir).resolve())
+    except RefHoundError:
+        pass
+    return str(path)
+
+
+def _current_ref_snapshot(target: str) -> dict[str, str] | None:
+    """Read refs without running the expensive scan pipeline or using the network."""
+    from refhound.git import refs as ref_api
+    from refhound.git.command import GitRunner
+    from refhound.git.repository import cache_root, remote_slug
+
+    if _is_remote(target):
+        cwd = cache_root() / "mirrors" / remote_slug(target)
+        if not (cwd / "HEAD").exists():
+            return None
+    else:
+        cwd = Path(target).expanduser().resolve()
+    git = GitRunner()
+    refs = ref_api.list_refs(git, cwd)
+    refs.extend(ref_api.stash_refs(git, cwd))
+    return {ref.ref_name: ref.target_oid for ref in refs}
+
+
+def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> ScanResult:
+    """Load a valid cached snapshot, otherwise scan and persist a new one."""
+    options = _resolve_options(
+        path,
+        profile=profile,
+        max_blob_size=None,
+        jobs=None,
+        fail_on=None,
+        baseline=None,
+        debug=False,
+    )
+    if not _is_remote(path):
+        _ensure(path)
+    repository = _repository_key(path)
+    db = Database(default_db_path())
+    try:
+        if not fresh:
+            snapshot = db.latest_snapshot(repository)
+            if (
+                snapshot is not None
+                and snapshot.get("profile") == options.profile.name
+                and snapshot.get("configuration_hash") == options.hash()
+            ):
+                try:
+                    current_refs = _current_ref_snapshot(path)
+                    stored_refs = db.latest_ref_snapshot(repository)
+                    if current_refs is not None and current_refs == stored_refs:
+                        _logger.info("using cached scan %s", snapshot.get("scan_id", ""))
+                        return _result_from_snapshot(snapshot, options)
+                except (KeyError, RefHoundError, OSError, TypeError, ValueError):
+                    _logger.debug("cached scan could not be loaded", exc_info=True)
+
+        result = Engine(options).run(path)
+        try:
+            transitions = _load_previous_ref_transitions(db, repository, result.data)
+        except RefHoundError:
+            transitions = []
+        result.data.findings.extend(_ref_change_findings(transitions, result.repository))
+        _store_scan(db, repository, result)
+        return result
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +452,6 @@ def scan(
         _fail(exc, debug)
         return
 
-    result.data.findings = _apply_baseline(result.data.findings, baseline)
     db: Database | None = Database(default_db_path()) if not options.debug else None
     try:
         repository_key = _repository_key(path)
@@ -318,6 +466,8 @@ def scan(
     finally:
         if db is not None:
             db.close()
+
+    result.data.findings = _apply_baseline(result.data.findings, baseline)
 
     if format_option == "json":
         output_text = json_ui.scan_json(result.data, options, include_secrets=True)
@@ -412,12 +562,13 @@ def findings(
     category: str = typer.Option(None, "--category", help="Filter by category"),
     score_min: int = typer.Option(None, "--score-min", help="Minimum score"),
     as_json: bool = typer.Option(False, "--json", help="JSON output"),
+    fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
     verbose: int = typer.Option(0, "-v", count=True),
 ) -> None:
     """Show findings for a repository."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=fresh or bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -448,12 +599,13 @@ def secrets(
     unreachable: bool = typer.Option(False, "--unreachable"),
     current: bool = typer.Option(False, "--current"),
     as_json: bool = typer.Option(False, "--json"),
+    fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
     verbose: int = typer.Option(0, "-v", count=True),
 ) -> None:
     """Show grouped secret records (always redacted)."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=fresh or bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -515,7 +667,7 @@ def refs(
     """List refs with resolved types."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -590,7 +742,7 @@ def objects(
     """Show object database statistics."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -620,7 +772,7 @@ def dangling(
     """Show dangling git objects."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -640,7 +792,7 @@ def unreachable(
     """Show unreachable commits."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -662,7 +814,7 @@ def lost(
     """Show reconstructed lost commit chains."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -811,7 +963,7 @@ def stats(
     """Show repository statistics."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path, fresh=bool(verbose))
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -1063,23 +1215,15 @@ def report(
     format_option: str = typer.Option("markdown", "--format", help="markdown | json | sarif"),
     output: str = typer.Option(None, "--output", "-o", help="Output file path"),
     deep: bool = typer.Option(False, "--deep"),
+    fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
     verbose: int = typer.Option(0, "-v", count=True),
 ) -> None:
     """Generate a report (Markdown, JSON or SARIF)."""
     _setup_logging(verbose)
     profile = "deep" if deep else "standard"
     try:
-        options = _resolve_options(
-            path,
-            profile=profile,
-            max_blob_size=None,
-            jobs=None,
-            fail_on=None,
-            baseline=None,
-            debug=False,
-        )
-        engine = Engine(options)
-        result = engine.run(path)
+        result = _load_or_scan(path, fresh=fresh or bool(verbose), profile=profile)
+        options = result.options
     except RefHoundError as exc:
         _fail(exc, False)
         return
