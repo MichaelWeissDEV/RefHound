@@ -34,7 +34,8 @@ from refhound.errors import (
     RepositoryError,
     UsageError,
 )
-from refhound.models.commit import CommitInfo
+from refhound.models.anomaly import ChurnFinding, InterestingCommit, TimelineRow
+from refhound.models.commit import CommitInfo, IdentitySet
 from refhound.models.finding import Finding, FindingCategory, SecretRecord, Severity, SourceState
 from refhound.models.object import DanglingObject, LostCommitChain
 from refhound.models.repository import RepoRef, RepositoryInfo
@@ -54,6 +55,11 @@ app.add_typer(analyze_app, name="analyze")
 console = console_ui.make_console()
 
 _logger = logging.getLogger("refhound")
+
+
+def _print_serialized(value: str) -> None:
+    """Write machine-readable output without Rich markup or line wrapping."""
+    console.print(value, markup=False, highlight=False, soft_wrap=True)
 
 
 def _version_callback(value: bool) -> None:
@@ -200,6 +206,10 @@ def _store_scan(db: Database | None, repository: str, result: ScanResult) -> Non
     findings = [f.model_dump(mode="json") for f in result.data.findings]
     secrets = [s.model_dump(mode="json") for s in result.data.secrets]
     statistics = compute_statistics(result.data).model_dump(mode="json")
+    commit_graph = [
+        commit.model_dump(mode="json", exclude={"body", "message"})
+        for commit in result.data.commit_graph.values()
+    ]
     db.store_scan(
         repository=repository,
         scan_id=result.data.scan_id,
@@ -208,6 +218,7 @@ def _store_scan(db: Database | None, repository: str, result: ScanResult) -> Non
         findings=findings,
         snapshot=_snapshot(result, statistics),
         secrets=secrets,
+        commit_graph=commit_graph,
         statistics=statistics,
         profile=result.options.profile.name,
     )
@@ -217,11 +228,12 @@ def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
     """Build the redacted, report-ready representation stored in SQLite."""
     data = result.data
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "scan_id": data.scan_id,
         "scan_timestamp": data.scan_timestamp,
         "profile": result.options.profile.name,
         "configuration_hash": result.options.hash(),
+        "cache_hash": result.options.cache_hash(),
         "repository": result.repository,
         "repo": data.repo.model_dump(mode="json") if data.repo else None,
         "findings": [f.model_dump(mode="json") for f in data.findings],
@@ -236,16 +248,36 @@ def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
         "deleted_files": list(data.deleted_files),
         "scan_warnings": list(data.scan_warnings),
         "duration_seconds": result.duration_seconds,
+        "commit_graph": {
+            sha: commit.model_dump(mode="json", exclude={"body", "message"})
+            for sha, commit in data.commit_graph.items()
+        },
+        "timeline": [row.model_dump(mode="json") for row in data.timeline],
+        "interesting": {
+            sha: entry.model_dump(mode="json") for sha, entry in data.interesting.items()
+        },
+        "churn": [entry.model_dump(mode="json") for entry in data.churn],
+        "identities": [identity.model_dump(mode="json") for identity in data.identities],
+        "renamed_files": list(data.renamed_files),
+        "merge_commit_count": data.merge_commit_count,
+        "signed_count": data.signed_count,
+        "unsigned_count": data.unsigned_count,
+        "history_components": data.history_components,
+        "notes_count": len(data.notes),
     }
 
 
 def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> ScanResult:
     """Validate and reconstruct report-ready analysis data from a DB snapshot."""
-    if snapshot.get("schema_version") != 1:
+    if snapshot.get("schema_version") != 2:
         raise ValueError("unsupported snapshot schema")
     data = AnalysisData(
         repo=(RepositoryInfo.model_validate(snapshot["repo"]) if snapshot.get("repo") else None),
         refs=[RepoRef.model_validate(value) for value in snapshot.get("refs", [])],
+        commit_graph={
+            sha: CommitInfo.model_validate(value)
+            for sha, value in snapshot.get("commit_graph", {}).items()
+        },
         reachable_oids=set(snapshot.get("reachable_oids", [])),
         unreachable_oids=set(snapshot.get("unreachable_oids", [])),
         dangling=[DanglingObject.model_validate(value) for value in snapshot.get("dangling", [])],
@@ -255,6 +287,19 @@ def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> Sca
             LostCommitChain.model_validate(value) for value in snapshot.get("lost_chains", [])
         ],
         deleted_files=list(snapshot.get("deleted_files", [])),
+        renamed_files=list(snapshot.get("renamed_files", [])),
+        timeline=[TimelineRow.model_validate(value) for value in snapshot.get("timeline", [])],
+        interesting={
+            sha: InterestingCommit.model_validate(value)
+            for sha, value in snapshot.get("interesting", {}).items()
+        },
+        churn=[ChurnFinding.model_validate(value) for value in snapshot.get("churn", [])],
+        identities=[IdentitySet.model_validate(value) for value in snapshot.get("identities", [])],
+        merge_commit_count=int(snapshot.get("merge_commit_count", 0)),
+        signed_count=int(snapshot.get("signed_count", 0)),
+        unsigned_count=int(snapshot.get("unsigned_count", 0)),
+        history_components=int(snapshot.get("history_components", 0)),
+        notes={str(index): b"" for index in range(int(snapshot.get("notes_count", 0)))},
         findings=[Finding.model_validate(value) for value in snapshot.get("findings", [])],
         scan_warnings=list(snapshot.get("scan_warnings", [])),
         scan_id=str(snapshot["scan_id"]),
@@ -336,19 +381,17 @@ def _current_ref_snapshot(target: str) -> dict[str, str] | None:
     return {ref.ref_name: ref.target_oid for ref in refs}
 
 
-def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> ScanResult:
-    """Load a valid cached snapshot, otherwise scan and persist a new one."""
-    options = _resolve_options(
-        path,
-        profile=profile,
-        max_blob_size=None,
-        jobs=None,
-        fail_on=None,
-        baseline=None,
-        debug=False,
-    )
+def _profile_covers(stored: object, requested: str) -> bool:
+    ranks = {"quick": 0, "standard": 1, "deep": 2, "forensic": 3}
+    return isinstance(stored, str) and ranks.get(stored, -1) >= ranks.get(requested, 99)
+
+
+def _load_or_run(path: str, options: ScanOptions, *, fresh: bool = False) -> ScanResult:
+    """Load a compatible complete snapshot, otherwise scan and persist one."""
     if not _is_remote(path):
         _ensure(path)
+    if options.debug:
+        return Engine(options).run(path)
     repository = _repository_key(path)
     db = Database(default_db_path())
     try:
@@ -356,16 +399,19 @@ def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> S
             snapshot = db.latest_snapshot(repository)
             if (
                 snapshot is not None
-                and snapshot.get("profile") == options.profile.name
-                and snapshot.get("configuration_hash") == options.hash()
+                and _profile_covers(snapshot.get("profile"), options.profile.name)
+                and snapshot.get("cache_hash") == options.cache_hash()
             ):
                 try:
                     current_refs = _current_ref_snapshot(path)
                     stored_refs = db.latest_ref_snapshot(repository)
                     if current_refs is not None and current_refs == stored_refs:
                         _logger.info("using cached scan %s", snapshot.get("scan_id", ""))
+                        stored_profile = snapshot.get("profile")
+                        if isinstance(stored_profile, str) and stored_profile in PROFILES:
+                            options.profile = PROFILES[stored_profile]
                         return _result_from_snapshot(snapshot, options)
-                except (KeyError, RefHoundError, OSError, TypeError, ValueError):
+                except (AttributeError, KeyError, RefHoundError, OSError, TypeError, ValueError):
                     _logger.debug("cached scan could not be loaded", exc_info=True)
 
         result = Engine(options).run(path)
@@ -378,6 +424,19 @@ def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> S
         return result
     finally:
         db.close()
+
+
+def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> ScanResult:
+    options = _resolve_options(
+        path,
+        profile=profile,
+        max_blob_size=None,
+        jobs=None,
+        fail_on=None,
+        baseline=None,
+        debug=False,
+    )
+    return _load_or_run(path, options, fresh=fresh)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +476,7 @@ def scan(
     fetch_lfs: bool = typer.Option(
         False, "--fetch-lfs", help="Explicitly fetch LFS content (slow)"
     ),
+    fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
     debug: bool = typer.Option(False, "--debug", help="Show full stack traces"),
     verbose: int = typer.Option(0, "-v", count=True, help="Increase verbosity (-v, -vv, -vvv)"),
 ) -> None:
@@ -446,26 +506,10 @@ def scan(
     )
 
     try:
-        engine = Engine(options)
-        result = engine.run(path)
+        result = _load_or_run(path, options, fresh=fresh)
     except RefHoundError as exc:
         _fail(exc, debug)
         return
-
-    db: Database | None = Database(default_db_path()) if not options.debug else None
-    try:
-        repository_key = _repository_key(path)
-        try:
-            transitions = _load_previous_ref_transitions(db, repository_key, result.data)
-        except RefHoundError:
-            transitions = []
-        ref_findings = _ref_change_findings(transitions, result.repository)
-        result.data.findings.extend(ref_findings)
-        if db is not None:
-            _store_scan(db, repository_key, result)
-    finally:
-        if db is not None:
-            db.close()
 
     result.data.findings = _apply_baseline(result.data.findings, baseline)
 
@@ -483,7 +527,7 @@ def scan(
         if output:
             Path(output).write_text(output_text, encoding="utf-8")
         else:
-            console.print(output_text)
+            _print_serialized(output_text)
 
     _report_warnings(result)
     exit_code = _exit_code_for(result, options.fail_on)
@@ -568,13 +612,13 @@ def findings(
     """Show findings for a repository."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=fresh or bool(verbose))
+        result = _load_or_scan(path, fresh=fresh)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     filtered = _filter_findings(result.data.findings, severity, category, score_min)
     if as_json:
-        console.print(json_ui.scan_json(result.data, result.options, include_secrets=True))
+        _print_serialized(json_ui.scan_json(result.data, result.options, include_secrets=True))
         return
     console_ui.render_findings_table(console, filtered)
 
@@ -605,7 +649,7 @@ def secrets(
     """Show grouped secret records (always redacted)."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=fresh or bool(verbose))
+        result = _load_or_scan(path, fresh=fresh)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -636,7 +680,7 @@ def secrets(
                 for s in selected
             ],
         }
-        console.print(json.dumps(payload, indent=2))
+        _print_serialized(json.dumps(payload, indent=2))
         return
     for secret in selected:
         state = (
@@ -667,7 +711,7 @@ def refs(
     """List refs with resolved types."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -684,7 +728,7 @@ def refs(
             }
             for r in result.data.refs
         ]
-        console.print(json.dumps(payload, indent=2))
+        _print_serialized(json.dumps(payload, indent=2))
         return
     for ref in result.data.refs:
         console.print(f"{ref.ref_name:<64} {ref.target_oid[:12]}  {ref.object_type or '-'}")
@@ -701,7 +745,7 @@ def commits(
     """List commits (most recent first)."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -726,7 +770,7 @@ def commits(
             }
             for c in items
         ]
-        console.print(json.dumps(payload, indent=2))
+        _print_serialized(json.dumps(payload, indent=2))
         return
     for c in items:
         mark = "" if c.reachable else " [red](unreachable)[/]"
@@ -742,13 +786,13 @@ def objects(
     """Show object database statistics."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     stats = result.data.object_stats
     if as_json:
-        console.print(json.dumps(stats.model_dump(mode="json"), indent=2))
+        _print_serialized(json.dumps(stats.model_dump(mode="json"), indent=2))
         return
     console_ui.render_summary(
         console,
@@ -772,12 +816,12 @@ def dangling(
     """Show dangling git objects."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     if as_json:
-        console.print(json.dumps([d.model_dump() for d in result.data.dangling], indent=2))
+        _print_serialized(json.dumps([d.model_dump() for d in result.data.dangling], indent=2))
         return
     for d in result.data.dangling:
         console.print(f"{d.oid[:12]}  {d.object_type}")
@@ -792,13 +836,13 @@ def unreachable(
     """Show unreachable commits."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     uncommits = sorted(result.data.unreachable_oids, key=lambda o: int(o, 16))
     if as_json:
-        console.print(json.dumps({"unreachable_commits": uncommits}, indent=2))
+        _print_serialized(json.dumps({"unreachable_commits": uncommits}, indent=2))
         return
     for sha in uncommits:
         console.print(sha)
@@ -814,7 +858,7 @@ def lost(
     """Show reconstructed lost commit chains."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -822,7 +866,7 @@ def lost(
     if contains_secret:
         chains = [c for c in chains if _chain_has_secret(c, result.data.secrets)]
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 [
                     {
@@ -863,7 +907,7 @@ def timeline(
     """Show the commit timeline."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -877,7 +921,7 @@ def timeline(
     if author:
         rows = [r for r in rows if author.lower() in r.author.lower()]
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 [
                     {
@@ -924,13 +968,13 @@ def authors(
     """Show author statistics."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     identities = result.data.identities
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 [
                     {
@@ -963,13 +1007,13 @@ def stats(
     """Show repository statistics."""
     _setup_logging(verbose)
     try:
-        result = _load_or_scan(path, fresh=bool(verbose))
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     stats = compute_statistics(result.data)
     if as_json:
-        console.print(json.dumps(stats.model_dump(mode="json"), indent=2))
+        _print_serialized(json.dumps(stats.model_dump(mode="json"), indent=2))
         return
     console.print("[bold]History[/]")
     console_ui.render_summary(
@@ -1029,14 +1073,14 @@ def history(
     """Show annotations about the repository history structure."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     data = result.data
     components = _history_components(data)
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 {
                     "components": components,
@@ -1066,7 +1110,7 @@ def interesting(
     """Show the most interesting commits by score."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -1075,7 +1119,7 @@ def interesting(
         key=lambda e: (-e.score, e.sha),
     )
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 [
                     {
@@ -1107,7 +1151,7 @@ def explain(
     """Explain why a specific commit is interesting."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -1151,7 +1195,7 @@ def explain_lost(
     """Explain a lost commit chain in detail."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -1222,7 +1266,7 @@ def report(
     _setup_logging(verbose)
     profile = "deep" if deep else "standard"
     try:
-        result = _load_or_scan(path, fresh=fresh or bool(verbose), profile=profile)
+        result = _load_or_scan(path, fresh=fresh, profile=profile)
         options = result.options
     except RefHoundError as exc:
         _fail(exc, False)
@@ -1237,7 +1281,7 @@ def report(
         Path(output).write_text(text, encoding="utf-8")
         console.print(f"Report written to {output}")
     else:
-        console.print(text)
+        _print_serialized(text)
 
 
 @app.command()
@@ -1284,7 +1328,7 @@ def baseline(
     """Create a baseline from the current findings."""
     _setup_logging(verbose)
     try:
-        result = _quick_scan(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
@@ -1305,22 +1349,12 @@ def analyze_churn(
     """Find files/secrets added and removed within a short window."""
     _setup_logging(verbose)
     try:
-        options = _resolve_options(
-            path,
-            profile="deep",
-            max_blob_size=None,
-            jobs=None,
-            fail_on=None,
-            baseline=None,
-            debug=False,
-        )
-        engine = Engine(options)
-        result = engine.run(path)
+        result = _load_or_scan(path)
     except RefHoundError as exc:
         _fail(exc, False)
         return
     if as_json:
-        console.print(
+        _print_serialized(
             json.dumps(
                 [
                     {
@@ -1346,22 +1380,6 @@ def analyze_churn(
 
 
 # ------------------------------------------------------------------ helpers
-
-
-def _quick_scan(path: str) -> ScanResult:
-    options = _resolve_options(
-        path,
-        profile="deep",
-        max_blob_size=None,
-        jobs=None,
-        fail_on=None,
-        baseline=None,
-        debug=False,
-    )
-    if not _is_remote(path):
-        _ensure(path)
-    engine = Engine(options)
-    return engine.run(path)
 
 
 def _history_components(data: AnalysisData) -> int:

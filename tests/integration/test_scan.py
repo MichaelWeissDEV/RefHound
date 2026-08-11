@@ -236,6 +236,21 @@ def test_cached_scan_refreshes_on_refs_and_fresh(
     assert [f.model_dump() for f in cached.data.findings] == [
         f.model_dump() for f in first.data.findings
     ]
+    assert {
+        sha: commit.model_dump(exclude={"body", "message"})
+        for sha, commit in cached.data.commit_graph.items()
+    } == {
+        sha: commit.model_dump(exclude={"body", "message"})
+        for sha, commit in first.data.commit_graph.items()
+    }
+    assert cached.data.identities == first.data.identities
+    assert cached.data.timeline == first.data.timeline
+    assert cached.data.interesting == first.data.interesting
+    assert cached.data.churn == first.data.churn
+
+    compatible = cli._load_or_scan(str(path), profile="standard")
+    assert calls == 0
+    assert compatible.options.profile.name == "deep"
 
     (path / "README.md").write_text("# Demo\nchanged\n", encoding="utf-8")
     git("add", "README.md")  # type: ignore[operator]

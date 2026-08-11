@@ -61,6 +61,7 @@ class Database:
         findings: list[dict[str, Any]] | None = None,
         snapshot: dict[str, Any] | None = None,
         secrets: list[dict[str, Any]] | None = None,
+        commit_graph: list[dict[str, Any]] | None = None,
         statistics: dict[str, Any] | None = None,
         profile: str = "standard",
     ) -> None:
@@ -117,6 +118,17 @@ class Database:
                         current=secret.get("current", False),
                         historical=secret.get("historical", False),
                         unreachable=secret.get("unreachable", False),
+                    )
+                )
+            for commit in commit_graph or []:
+                session.add(
+                    schema.CommitRecord(
+                        scan_id=scan_id,
+                        sha=commit.get("sha", ""),
+                        author_email=commit.get("author_email", ""),
+                        committer_email=commit.get("committer_email", ""),
+                        subject=commit.get("subject", ""),
+                        reachable=commit.get("reachable", True),
                     )
                 )
             if statistics is not None:

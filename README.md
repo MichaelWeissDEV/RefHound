@@ -52,11 +52,11 @@ refhound report . --format markdown -o report.md
 refhound analyze churn .
 ```
 
-Completed scans are persisted locally. Result-oriented commands such as
-`findings`, `secrets`, `lost`, `stats`, `objects`, `dangling`, `unreachable`,
-`refs`, and `report` reuse the snapshot while refs and scan configuration remain unchanged.
-Use `--fresh` on `findings`, `secrets`, or `report` (or pass `-v`) to rescan.
-Only redacted secret metadata is stored.
+Completed scans are persisted locally. Run `refhound scan URL --deep` once;
+all reporting and analysis commands then reuse its complete snapshot while
+refs and relevant settings remain unchanged. `scan` itself also uses the
+cache unless `--fresh` is passed. Remote mirrors are reused and are not
+automatically downloaded again. Only redacted secret metadata is stored.
 
 Exit codes: `0` clean / `1` findings above `--fail-on` threshold / `2` usage
 or configuration error / `3` git, repository or provider error / `4`

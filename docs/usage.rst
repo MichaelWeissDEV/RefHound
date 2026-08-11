@@ -10,19 +10,19 @@ logging. ``refhound --version`` prints the installed version.
 Scan result cache
 -----------------
 
-Successful scans are stored in RefHound's local SQLite database. The
-``findings``, ``secrets``, ``lost``, ``stats``, ``objects``, ``dangling``,
-``unreachable``, ``refs`` and ``report`` commands reuse the latest result
-when the repository refs and scan configuration have not changed. Cached secrets
-contain only fingerprints, prefixes and suffixes; complete secret values are
-never persisted.
+Successful scans are stored in RefHound's local SQLite database. Run
+``refhound scan URL --deep`` once to collect the complete commit graph,
+authors, timeline, churn, findings, secrets and archaeology data. Every
+reporting and analysis command then reuses that snapshot while repository
+refs and relevant scan settings remain unchanged. Cached secrets contain
+only fingerprints, prefixes and suffixes; complete secret values are never
+persisted.
 
-Use ``--fresh`` with ``findings``, ``secrets`` or ``report`` to force a new
-scan. Passing ``-v`` to any cache-backed command also refreshes the result.
-The ``scan`` command always runs the pipeline and writes a new snapshot.
-Commands that need the complete commit graph (for example ``commits``,
-``authors``, ``timeline``, ``interesting``, ``history`` and ``explain``)
-continue to scan directly.
+The ``scan`` command also reuses a compatible snapshot. Use ``scan --fresh``
+to force a new analysis. For remote URLs, an existing local mirror is reused
+even for a fresh analysis; RefHound does not automatically fetch or clone it
+again. The ``forensic`` profile can satisfy commands requesting ``deep`` or a
+smaller profile, and ``deep`` can satisfy ``standard``.
 
 Global exit codes
 -----------------
@@ -68,6 +68,7 @@ Options:
 * ``--unshallow`` - fetch full history if the repository is shallow.
 * ``--include-vendor`` - also scan vendored/dependency content.
 * ``--fetch-lfs`` - explicitly fetch LFS content (slow).
+* ``--fresh`` - ignore the cached result and run a new analysis.
 * ``--debug`` - show full stack traces.
 
 Examples:

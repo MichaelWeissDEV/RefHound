@@ -1,6 +1,5 @@
-Read the Docs configuration for the Sphinx documentation.
-
-See https://docs.readthedocs.io/en/stable/config-file/v2.html
+# Read the Docs configuration for the Sphinx documentation.
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html
 
 version: 2
 

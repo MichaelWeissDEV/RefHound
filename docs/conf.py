@@ -14,9 +14,7 @@ copyright = "2026, Michael Weiss"
 version = os.environ.get("REFHOUND_DOC_VERSION", "0.1.0")
 release = version
 
-extensions = [
-    "sphinx.ext.intersphinx",
-]
+extensions: list[str] = []
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -31,6 +29,3 @@ html_theme_options = {
     "style_external_links": True,
 }
 html_static_path: list[str] = []
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-}

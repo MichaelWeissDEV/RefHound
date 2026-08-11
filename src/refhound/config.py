@@ -123,6 +123,21 @@ class ScanOptions:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
+    def cache_hash(self) -> str:
+        """Fingerprint result-affecting settings shared across compatible profiles."""
+        payload = json.dumps(
+            {
+                "max_blob_size": self.max_blob_size,
+                "fetch_lfs": self.fetch_lfs,
+                "unshallow": self.unshallow,
+                "include_vendor": self.include_vendor,
+                "ignore": asdict(self.ignore),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
     """Load ``.refhound.yml`` from a repository directory if present."""
