@@ -25,6 +25,7 @@ from refhound.analysis import force_push_analysis
 from refhound.analysis.data import AnalysisData
 from refhound.analysis.force_push_analysis import RefTransition
 from refhound.baseline import create_baseline, load_baseline, suppress_with_baseline
+from refhound.cli_cache import register_cache_commands
 from refhound.config import PROFILES, ScanOptions, load_config_file, options_from_config
 from refhound.errors import (
     ConfigError,
@@ -47,10 +48,14 @@ from refhound.reporting import sarif as sarif_ui
 from refhound.reporting.statistics import compute_statistics
 from refhound.scanners.engine import Engine, ScanResult
 from refhound.storage.database import Database, default_db_path
+from refhound.util.hashing import redacted_label
+from refhound.util.output import secure_write_text
 
 app = typer.Typer(help="RefHound - Git repository security and forensic analysis tool.")
 analyze_app = typer.Typer(help="Focused analyses.")
+cache_app = typer.Typer(help="Inspect and maintain remote mirror cache.")
 app.add_typer(analyze_app, name="analyze")
+app.add_typer(cache_app, name="cache")
 
 console = console_ui.make_console()
 
@@ -60,6 +65,19 @@ _logger = logging.getLogger("refhound")
 def _print_serialized(value: str) -> None:
     """Write machine-readable output without Rich markup or line wrapping."""
     console.print(value, markup=False, highlight=False, soft_wrap=True)
+
+
+def _detail_json(result: ScanResult, key: str, value: object) -> str:
+    """Versioned envelope shared by detail-command JSON outputs."""
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "refhound_version": __version__,
+            "repository": result.repository,
+            key: value,
+        },
+        indent=2,
+    )
 
 
 def _version_callback(value: bool) -> None:
@@ -106,12 +124,12 @@ def _resolve_options(
     *,
     profile: str | None,
     max_blob_size: int | None,
-    jobs: int | None,
     fail_on: str | None,
     baseline: str | None,
-    fetch_lfs: bool = False,
     unshallow: bool = False,
     include_vendor: bool = False,
+    refresh_remote: bool = False,
+    offline: bool = False,
     debug: bool = False,
 ) -> ScanOptions:
     profile = profile or "standard"
@@ -122,12 +140,12 @@ def _resolve_options(
     options = ScanOptions(
         profile=scan_profile,
         max_blob_size=max_blob_size or 5 * 1024 * 1024,
-        jobs=jobs,
         fail_on=fail_on,
         baseline_path=baseline,
-        fetch_lfs=fetch_lfs,
         unshallow=unshallow,
         include_vendor=include_vendor,
+        refresh_remote=refresh_remote,
+        offline=offline,
         debug=debug,
     )
     try:
@@ -192,17 +210,21 @@ def _ref_change_findings(transitions: list[RefTransition], repo_display: str) ->
     return findings
 
 
-def _apply_baseline(findings: list[Finding], baseline_path: str | None) -> list[Finding]:
+def _apply_baseline(
+    findings: list[Finding], baseline_path: str | None, *, repository: str | None = None
+) -> list[Finding]:
     if not baseline_path:
         return findings
-    baseline = load_baseline(baseline_path)
+    baseline = load_baseline(baseline_path, repository=repository)
     return suppress_with_baseline(findings, baseline)
 
 
 def _store_scan(db: Database | None, repository: str, result: ScanResult) -> None:
     if db is None:
         return
-    refs = [r.model_dump(mode="json") for r in result.data.refs]
+    # Reflog pseudo-refs are forensic evidence, not stable ref tips used for
+    # cache invalidation. Their selectors change independently of ref state.
+    refs = [r.model_dump(mode="json") for r in result.data.refs if r.source != "reflog"]
     findings = [f.model_dump(mode="json") for f in result.data.findings]
     secrets = [s.model_dump(mode="json") for s in result.data.secrets]
     statistics = compute_statistics(result.data).model_dump(mode="json")
@@ -317,6 +339,8 @@ def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> Sca
 
 
 def _exit_code_for(result: ScanResult, fail_on: str | None) -> int:
+    if not getattr(result.data, "complete", True):
+        return 5
     if not fail_on:
         return 0
     try:
@@ -431,7 +455,6 @@ def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> S
         path,
         profile=profile,
         max_blob_size=None,
-        jobs=None,
         fail_on=None,
         baseline=None,
         debug=False,
@@ -454,7 +477,6 @@ def scan(
     max_blob_size: int = typer.Option(
         None, "--max-blob-size", help="Skip blobs larger than N bytes"
     ),
-    jobs: int = typer.Option(None, "--jobs", help="Parallel worker count (default: min(cpu, 8))"),
     fail_on: str = typer.Option(
         None, "--fail-on", help="Exit 1 if any finding reaches this severity"
     ),
@@ -473,10 +495,11 @@ def scan(
     include_vendor: bool = typer.Option(
         False, "--include-vendor", help="Also scan vendored/dependency content"
     ),
-    fetch_lfs: bool = typer.Option(
-        False, "--fetch-lfs", help="Explicitly fetch LFS content (slow)"
-    ),
     fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
+    refresh_remote: bool = typer.Option(
+        False, "--refresh-remote", help="Fetch updates into an existing remote mirror"
+    ),
+    offline: bool = typer.Option(False, "--offline", help="Never access the network"),
     debug: bool = typer.Option(False, "--debug", help="Show full stack traces"),
     verbose: int = typer.Option(0, "-v", count=True, help="Increase verbosity (-v, -vv, -vvv)"),
 ) -> None:
@@ -496,22 +519,24 @@ def scan(
         path,
         profile=effective_profile,
         max_blob_size=max_blob_size,
-        jobs=jobs,
         fail_on=fail_on,
         baseline=baseline,
-        fetch_lfs=fetch_lfs,
         unshallow=unshallow,
         include_vendor=include_vendor,
+        refresh_remote=refresh_remote,
+        offline=offline,
         debug=debug,
     )
 
     try:
-        result = _load_or_run(path, options, fresh=fresh)
+        result = _load_or_run(path, options, fresh=fresh or refresh_remote)
     except RefHoundError as exc:
         _fail(exc, debug)
         return
 
-    result.data.findings = _apply_baseline(result.data.findings, baseline)
+    result.data.findings = _apply_baseline(
+        result.data.findings, baseline, repository=result.repository
+    )
 
     if format_option == "json":
         output_text = json_ui.scan_json(result.data, options, include_secrets=True)
@@ -525,7 +550,7 @@ def scan(
 
     if output_text is not None:
         if output:
-            Path(output).write_text(output_text, encoding="utf-8")
+            secure_write_text(output, output_text)
         else:
             _print_serialized(output_text)
 
@@ -618,7 +643,15 @@ def findings(
         return
     filtered = _filter_findings(result.data.findings, severity, category, score_min)
     if as_json:
-        _print_serialized(json_ui.scan_json(result.data, result.options, include_secrets=True))
+        _print_serialized(
+            json_ui.findings_json(
+                result.data,
+                filtered,
+                severity=severity,
+                category=category,
+                score_min=score_min,
+            )
+        )
         return
     console_ui.render_findings_table(console, filtered)
 
@@ -633,7 +666,9 @@ def _filter_findings(
         result = [f for f in result if f.category.value == category.lower()]
     if score_min is not None:
         result = [f for f in result if f.score >= score_min]
-    return sorted(result, key=lambda f: (f.severity.value, -f.score))
+    from refhound.util.sorting import finding_sort_key
+
+    return sorted(result, key=finding_sort_key)
 
 
 @app.command()
@@ -662,6 +697,8 @@ def secrets(
         selected = [s for s in selected if s.unreachable]
     if as_json:
         payload = {
+            "schema_version": "1",
+            "refhound_version": __version__,
             "repository": result.repository,
             "secrets": [
                 {
@@ -690,7 +727,8 @@ def secrets(
         if secret.lifetime_seconds is not None:
             lifetime = f" (lifetime {int(secret.lifetime_seconds)}s)"
         console.print(
-            f"[yellow]{secret.prefix}…{secret.suffix}[/]  {secret.detector}  "
+            f"[yellow]{redacted_label(secret.prefix, secret.suffix, secret.fingerprint)}[/]  "
+            f"{secret.detector}  "
             f"state={state}  occurrences={secret.occurrence_count}{lifetime}"
         )
         if secret.introduced_commit:
@@ -728,7 +766,7 @@ def refs(
             }
             for r in result.data.refs
         ]
-        _print_serialized(json.dumps(payload, indent=2))
+        _print_serialized(_detail_json(result, "refs", payload))
         return
     for ref in result.data.refs:
         console.print(f"{ref.ref_name:<64} {ref.target_oid[:12]}  {ref.object_type or '-'}")
@@ -770,7 +808,7 @@ def commits(
             }
             for c in items
         ]
-        _print_serialized(json.dumps(payload, indent=2))
+        _print_serialized(_detail_json(result, "commits", payload))
         return
     for c in items:
         mark = "" if c.reachable else " [red](unreachable)[/]"
@@ -792,7 +830,7 @@ def objects(
         return
     stats = result.data.object_stats
     if as_json:
-        _print_serialized(json.dumps(stats.model_dump(mode="json"), indent=2))
+        _print_serialized(_detail_json(result, "objects", stats.model_dump(mode="json")))
         return
     console_ui.render_summary(
         console,
@@ -821,7 +859,9 @@ def dangling(
         _fail(exc, False)
         return
     if as_json:
-        _print_serialized(json.dumps([d.model_dump() for d in result.data.dangling], indent=2))
+        _print_serialized(
+            _detail_json(result, "dangling", [d.model_dump() for d in result.data.dangling])
+        )
         return
     for d in result.data.dangling:
         console.print(f"{d.oid[:12]}  {d.object_type}")
@@ -842,7 +882,7 @@ def unreachable(
         return
     uncommits = sorted(result.data.unreachable_oids, key=lambda o: int(o, 16))
     if as_json:
-        _print_serialized(json.dumps({"unreachable_commits": uncommits}, indent=2))
+        _print_serialized(_detail_json(result, "unreachable_commits", uncommits))
         return
     for sha in uncommits:
         console.print(sha)
@@ -1223,6 +1263,7 @@ def explain_lost(
 @app.command()
 def doctor(
     path: str = typer.Argument(...),
+    as_json: bool = typer.Option(False, "--json", help="JSON output"),
     verbose: int = typer.Option(0, "-v", count=True),
 ) -> None:
     """Check repository health and tool prerequisites."""
@@ -1242,15 +1283,45 @@ def doctor(
     except Exception as exc:
         console.print(f"[red]repository error[/] {exc}")
         return
+    from refhound.git.lfs import lfs_installed
+    from refhound.git.repository import cache_root
+
+    details = {
+        "schema_version": "1",
+        "refhound_version": __version__,
+        "git_version": version,
+        "python_version": sys.version.split()[0],
+        "repository": info.path,
+        "object_format": info.object_format,
+        "bare": info.bare,
+        "shallow": info.shallow,
+        "partial": info.partial,
+        "work_tree": info.work_tree,
+        "head": info.head_sha,
+        "head_ref": info.head_ref,
+        "remote": info.remote_url,
+        "lfs_available": lfs_installed(git, info.git_dir or info.path),
+        "database_path": str(default_db_path()),
+        "cache_path": str(cache_root()),
+        "providers_enabled": False,
+        "profiles": sorted(PROFILES),
+    }
+    if as_json:
+        _print_serialized(json.dumps(details, indent=2))
+        return
     console.print(f"- bare: {info.bare}")
     console.print(f"- shallow: {info.shallow}")
     console.print(f"- partial clone: {info.partial}")
+    console.print(f"- object format: {info.object_format}")
     console.print(f"- work tree: {info.work_tree or '-'}")
     console.print(f"- HEAD: {(info.head_sha or '-')[:12]} on {info.head_ref or '-'}")
     if info.remote_url:
         console.print(f"- remote origin: {info.remote_url}")
     else:
         console.print("- remote origin: none")
+    console.print(f"- git-lfs available: {details['lfs_available']}")
+    console.print(f"- database: {details['database_path']}")
+    console.print(f"- cache: {details['cache_path']}")
 
 
 @app.command()
@@ -1278,7 +1349,7 @@ def report(
     else:
         text = markdown_ui.markdown_report(result.data, options)
     if output:
-        Path(output).write_text(text, encoding="utf-8")
+        secure_write_text(output, text)
         console.print(f"Report written to {output}")
     else:
         _print_serialized(text)
@@ -1332,8 +1403,8 @@ def baseline(
     except RefHoundError as exc:
         _fail(exc, False)
         return
-    text = create_baseline(result.data.findings)
-    Path(output).write_text(text, encoding="utf-8")
+    text = create_baseline(result.data.findings, repository=result.repository)
+    secure_write_text(output, text)
     console.print(f"Baseline written to {output} ({len(result.data.findings)} findings)")
 
 
@@ -1419,6 +1490,9 @@ class _ExitError(Exception):
 
 def _exit(code: int) -> None:
     raise _ExitError(code)
+
+
+register_cache_commands(cache_app, console, _print_serialized, _fail)
 
 
 def main() -> None:

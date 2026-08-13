@@ -38,6 +38,10 @@ class RepositoryInfo(BaseModel):
     first_commit_date: datetime | None = None
     last_commit_date: datetime | None = None
     version: str = ""
+    object_format: str = "sha1"
+    acquisition_mode: str = "local"
+    mirror_identifier: str | None = None
+    last_fetch_timestamp: datetime | None = None
 
 
 class RepositoryFingerprint(BaseModel):

@@ -10,6 +10,8 @@ from refhound.models.finding import Finding
 from refhound.models.object import LostCommitChain
 from refhound.models.statistics import RepositoryStatistics
 from refhound.reporting.statistics import compute_statistics
+from refhound.util.hashing import redacted_label
+from refhound.util.sorting import finding_sort_key
 
 
 def _finding_md(finding: Finding) -> str:
@@ -58,10 +60,7 @@ def markdown_report(
 ) -> str:
     """Render the standard Markdown report."""
     stats = compute_statistics(data)
-    findings = sorted(
-        data.findings,
-        key=lambda f: (f.severity.value, -f.score),
-    )
+    findings = sorted(data.findings, key=finding_sort_key)
     repo = data.repo
     out: list[str] = []
     out += [
@@ -73,6 +72,9 @@ def markdown_report(
         f"- Repository: `{repo.path if repo else '-'}`",
         f"- Remote: `{repo.remote_url if repo else '-'}`",
         f"- HEAD: `{((repo.head_sha or '')[:8]) if repo else '-'}`",
+        f"- Object format: `{repo.object_format if repo else '-'}`",
+        f"- Acquisition mode: `{repo.acquisition_mode if repo else '-'}`",
+        f"- Last mirror fetch: `{repo.last_fetch_timestamp if repo else '-'}`",
         "",
     ]
 
@@ -86,8 +88,18 @@ def markdown_report(
         f"{stats.findings.medium} medium, {stats.findings.low} low, {stats.findings.info} info findings",
         f"- {stats.secrets.unique_secrets} unique secret(s) recorded",
         f"- {len(data.deleted_files)} deleted security-relevant file(s)",
+        f"- Scan complete: {'yes' if data.complete else 'NO'}",
         "",
     ]
+
+    if data.diagnostics:
+        out += ["## Scan Diagnostics", ""]
+        out += [
+            f"- **{diagnostic.severity.value.upper()}** `{diagnostic.stage}`/"
+            f"`{diagnostic.component}`: {diagnostic.message}"
+            for diagnostic in data.diagnostics
+        ]
+        out += [""]
 
     out += ["## Repository Overview", ""]
     out += [
@@ -116,7 +128,8 @@ def markdown_report(
                 else ("historical" if secret.historical else "unreachable")
             )
             out += [
-                f"- `{secret.prefix}…{secret.suffix}` ({secret.detector}) - {state} "
+                f"- `{redacted_label(secret.prefix, secret.suffix, secret.fingerprint)}` "
+                f"({secret.detector}) - {state} "
                 f"- {secret.occurrence_count} occurrence(s)"
             ]
     else:

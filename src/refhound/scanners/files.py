@@ -9,7 +9,7 @@ from __future__ import annotations
 from refhound.analysis import deletion_analysis
 from refhound.analysis.data import AnalysisData
 from refhound.git.command import GitRunner
-from refhound.util.paths import classify_path_category, is_interesting_path, path_is_ignored
+from refhound.util.paths import classify_path_category, is_interesting_path, path_is_excluded
 
 
 def scan_files(
@@ -37,7 +37,7 @@ def scan_files(
     interesting_set = {
         p
         for p in seen_paths
-        if not path_is_ignored(p, ignored)
+        if not path_is_excluded(p, ignored, include_vendor=include_vendor)
         and (is_interesting_path(p) or classify_path_category(p) is not None)
     }
 

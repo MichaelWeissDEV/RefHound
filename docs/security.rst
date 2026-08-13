@@ -9,13 +9,29 @@ Secret handling
 * **Secrets are redacted at the source.** Detectors return only a prefix, a
   suffix, a category and a content-derived fingerprint (``sec_...``). The
   full value never leaves the detection layer.
-* **Nothing is persisted.** Console output, JSON, Markdown, SARIF reports,
-  the SQLite database and logs contain fingerprints and redacted fragments
-  only. A test asserts the full test token never appears in any report
-  format or the database (``tests/integration/test_scan.py``).
+* **Full secret values are never persisted.** SQLite and reports do persist
+  repository/ref and commit metadata, findings, author identities, stable
+  fingerprints, and safe redacted fragments. Treat them as sensitive
+  forensic artifacts.
 * **Short secrets** (at or below ``MIN_SECRET_LENGTH = 8``) are shown only
   as ``<redacted:sec_...>`` to avoid trivial reconstruction from a short
   mask.
+
+Fingerprint privacy tradeoff
+----------------------------
+
+Version 0.1 uses stable, unsalted SHA-256 secret fingerprints so findings and
+baselines remain comparable. A report holder can therefore test guesses for
+low-entropy passwords offline. Fingerprints are sensitive data. Moving to an
+installation-keyed HMAC requires an explicit schema and baseline migration.
+
+Remote authentication
+---------------------
+
+URL userinfo and credential-like query parameters are centrally sanitized
+before remote URLs enter models, reports, logs, or exceptions. Prefer a Git
+credential manager or SSH configuration over credentials embedded in URLs;
+shell history and process listings are outside RefHound's control.
 
 What RefHound will never do
 ---------------------------

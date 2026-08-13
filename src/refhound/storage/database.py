@@ -7,6 +7,7 @@ full secret values are never written to the database.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from refhound.storage import schema
 
 _DATA_DIRNAME = "refhound"
+SCHEMA_VERSION = 2
 
 
 def default_db_path() -> Path:
@@ -30,8 +32,12 @@ class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "posix":
+            self.path.parent.chmod(0o700)
         self.engine = create_engine(f"sqlite:///{self.path}", future=True)
         schema.Base.metadata.create_all(self.engine)
+        if os.name == "posix":
+            self.path.chmod(0o600)
         self._migrate()
         self._session_factory = sessionmaker(
             bind=self.engine, expire_on_commit=False, class_=Session
@@ -45,11 +51,18 @@ class Database:
         self.engine.dispose()
 
     def _migrate(self) -> None:
-        """Apply small, idempotent migrations for databases from older releases."""
+        """Apply transactional, idempotent migrations and record the version."""
         columns = {column["name"] for column in inspect(self.engine).get_columns("scans")}
-        if "snapshot_json" not in columns:
-            with self.engine.begin() as connection:
+        with self.engine.begin() as connection:
+            if "snapshot_json" not in columns:
                 connection.execute(text("ALTER TABLE scans ADD COLUMN snapshot_json TEXT"))
+            connection.execute(
+                text(
+                    "INSERT INTO schema_metadata(key, value) VALUES ('schema_version', :version) "
+                    "ON CONFLICT(key) DO UPDATE SET value=:version"
+                ),
+                {"version": str(SCHEMA_VERSION)},
+            )
 
     def store_scan(
         self,

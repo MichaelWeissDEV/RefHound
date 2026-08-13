@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import quote
 
 from refhound.analysis.data import AnalysisData
 from refhound.config import ScanOptions
@@ -27,7 +28,7 @@ SARIF_LEVEL = {
 
 
 def _artifact_uri(finding: Finding) -> str:
-    return f"file:///{finding.path.replace(' ', '%20')}" if finding.path else ""
+    return quote(finding.path.replace("\\", "/"), safe="/") if finding.path else ""
 
 
 def sarif_document(data: AnalysisData, options: ScanOptions) -> str:
@@ -80,6 +81,7 @@ def sarif_document(data: AnalysisData, options: ScanOptions) -> str:
         }
         if finding.secret_fingerprint:
             result["partialFingerprints"]["secretFingerprint"] = finding.secret_fingerprint
+        result["partialFingerprints"]["findingId"] = finding.id
         results.append(result)
 
     doc: dict[str, Any] = {
@@ -90,7 +92,7 @@ def sarif_document(data: AnalysisData, options: ScanOptions) -> str:
                 "tool": {
                     "driver": {
                         "name": "RefHound",
-                        "informationUri": "https://github.com/anomalyco/opencode",
+                        "informationUri": "https://refhound.readthedocs.io/",
                         "version": _version(),
                         "rules": list(rules.values()) or None,
                     }

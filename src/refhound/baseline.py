@@ -14,6 +14,7 @@ from refhound.errors import ConfigError
 from refhound.models.finding import Finding
 
 BASELINE_VERSION = 1
+FINGERPRINT_VERSION = "sha256-v1"
 
 
 def finding_fingerprint(finding: Finding) -> str:
@@ -28,10 +29,12 @@ def finding_fingerprint(finding: Finding) -> str:
     return "|".join(parts)
 
 
-def create_baseline(findings: list[Finding]) -> str:
+def create_baseline(findings: list[Finding], *, repository: str = "") -> str:
     """Serialize findings into a baseline document."""
     payload = {
-        "version": BASELINE_VERSION,
+        "schema_version": BASELINE_VERSION,
+        "fingerprint_version": FINGERPRINT_VERSION,
+        "repository": repository,
         "findings": [
             {
                 "fingerprint": finding_fingerprint(f),
@@ -44,7 +47,7 @@ def create_baseline(findings: list[Finding]) -> str:
     return json.dumps(payload, indent=2)
 
 
-def load_baseline(path: str | Path) -> set[str]:
+def load_baseline(path: str | Path, *, repository: str | None = None) -> set[str]:
     """Load baseline fingerprints; raises ConfigError on invalid input."""
     baseline_path = Path(path)
     if not baseline_path.exists():
@@ -55,6 +58,15 @@ def load_baseline(path: str | Path) -> set[str]:
         raise ConfigError(f"invalid baseline JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError("baseline must be a JSON object with a 'findings' list")
+    version = data.get("schema_version", data.get("version"))
+    if version != BASELINE_VERSION:
+        raise ConfigError(f"unsupported baseline schema version: {version!r}")
+    fingerprint_version = data.get("fingerprint_version", FINGERPRINT_VERSION)
+    if fingerprint_version != FINGERPRINT_VERSION:
+        raise ConfigError(f"unsupported baseline fingerprint version: {fingerprint_version!r}")
+    bound_repository = data.get("repository")
+    if repository and bound_repository and bound_repository != repository:
+        raise ConfigError("baseline belongs to a different repository")
     entries = data.get("findings", [])
     if not isinstance(entries, list):
         raise ConfigError("baseline 'findings' must be a list")

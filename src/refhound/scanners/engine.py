@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from refhound.analysis import correlations, deletion_analysis
 from refhound.analysis.commit_anomalies import score_commit
@@ -25,7 +25,7 @@ from refhound.config import ScanOptions
 from refhound.errors import GitError, RepositoryError
 from refhound.git import commits as commit_api
 from refhound.git import fsck, objects
-from refhound.git.command import GitRunner, validate_oid
+from refhound.git.command import GitRunner, is_valid_oid, validate_oid
 from refhound.git.repository import open_repository, prepare_remote
 from refhound.models.anomaly import InterestingCommit
 from refhound.models.finding import (
@@ -37,7 +37,7 @@ from refhound.models.finding import (
     SourceState,
 )
 from refhound.models.object import BlobRecord, LostCommitChain
-from refhound.models.repository import RepoRef, RepositoryInfo
+from refhound.models.repository import RepoRef, RepositoryInfo, RepositoryOrigin
 from refhound.scanners import ci, files, history, identity, refs, secrets, timeline, unreachable
 from refhound.scanners.base import FindingCollector, RepositoryContext
 from refhound.util.dates import utc_now
@@ -45,6 +45,7 @@ from refhound.util.paths import (
     classify_path_category,
     is_interesting_path,
 )
+from refhound.util.sorting import finding_sort_key
 
 logger = logging.getLogger("refhound.engine")
 
@@ -59,14 +60,7 @@ class ScanResult:
 
     @property
     def findings_sorted(self) -> list[Finding]:
-        order = {
-            Severity.CRITICAL: 0,
-            Severity.HIGH: 1,
-            Severity.MEDIUM: 2,
-            Severity.LOW: 3,
-            Severity.INFO: 4,
-        }
-        return sorted(self.data.findings, key=lambda f: (order.get(f.severity, 9), -f.score, f.id))
+        return sorted(self.data.findings, key=finding_sort_key)
 
 
 def _repo_display(repo: RepositoryInfo) -> str:
@@ -101,7 +95,7 @@ def _blob_inventory(git: GitRunner, cwd: str) -> dict[str, BlobRecord]:
     oid_paths: dict[str, list[str]] = {}
     for line in out.splitlines():
         parts = line.split(" ", 1)
-        if not parts or len(parts[0]) != 40:
+        if not parts or not is_valid_oid(parts[0]):
             continue
         oid = parts[0]
         path = parts[1].strip() if len(parts) > 1 else ""
@@ -177,8 +171,21 @@ class Engine:
     # ---------------------------------------------------------- acquisition
     def _acquire(self, target: str) -> RepositoryInfo:
         if target.startswith(("http://", "https://", "git@", "ssh://")):
-            mirror = prepare_remote(target, git=self.git)
-            return self._open(str(mirror))
+            mirror = prepare_remote(
+                target,
+                git=self.git,
+                refresh=self.options.refresh_remote,
+                offline=self.options.offline,
+            )
+            info = self._open(str(mirror))
+            info.origin = RepositoryOrigin.CLONE
+            info.acquisition_mode = "offline" if self.options.offline else "online"
+            info.mirror_identifier = mirror.name
+            marker = mirror / "FETCH_HEAD"
+            if not marker.exists():
+                marker = mirror / "HEAD"
+            info.last_fetch_timestamp = datetime.fromtimestamp(marker.stat().st_mtime, tz=UTC)
+            return info
         return self._open(target)
 
     def _open(self, path: str) -> RepositoryInfo:
@@ -192,7 +199,13 @@ class Engine:
     # ------------------------------------------------------------- inventory
     def _inventory(self, context: RepositoryContext, data: AnalysisData, cwd: str) -> None:
         logger.info("ref inventory")
-        refs.scan_refs(self.git, cwd, data)
+        refs.scan_refs(
+            self.git,
+            cwd,
+            data,
+            include_stash=self.options.profile.stash,
+            include_reflogs=self.options.profile.reflogs,
+        )
 
         try:
             inv = objects.count_objects(self.git, cwd)
@@ -277,9 +290,14 @@ class Engine:
 
     # ---------------------------------------------------------------- secrets
     def _secrets(self, context: RepositoryContext, data: AnalysisData, cwd: str) -> None:
+        if not self.options.profile.secret_scan:
+            return
         from refhound.detectors.registry import resolve_detectors
 
-        detectors = resolve_detectors(disabled=self.options.ignore.detectors)
+        disabled = list(self.options.ignore.detectors)
+        if not self.options.profile.entropy_scan:
+            disabled.append("entropy")
+        detectors = resolve_detectors(disabled=disabled)
         secrets.scan_secrets(
             self.git,
             cwd,
@@ -287,15 +305,18 @@ class Engine:
             detectors=detectors,
             max_blob_size=self.options.max_blob_size,
             binary_scan=self.options.profile.binary_scan,
+            include_vendor=self.options.include_vendor,
             ignored_paths=self.options.ignore.paths,
         )
 
     def _unreachable(self, context: RepositoryContext, data: AnalysisData, cwd: str) -> None:
-        unreachable.scan_unreachable(self.git, cwd, data)
+        if self.options.profile.unreachable_objects:
+            unreachable.scan_unreachable(self.git, cwd, data)
 
     def _history_and_files(self, context: RepositoryContext, data: AnalysisData, cwd: str) -> None:
         repo_display = _repo_display(data.repo) if data.repo else ""
-        self.collector.extend(history.scan_history(self.git, cwd, data, repo_display))
+        if self.options.profile.notes:
+            self.collector.extend(history.scan_history(self.git, cwd, data, repo_display))
         self.collector.extend(ci.scan_ci(self.git, cwd, data, repo_display))
         files.scan_files(
             self.git,

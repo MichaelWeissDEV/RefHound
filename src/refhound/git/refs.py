@@ -81,4 +81,4 @@ def stash_refs(git: GitRunner, cwd: str | Path) -> list[RepoRef]:
         return []
     if not sha:
         return []
-    return [RepoRef(ref_name="refs/stash", target_oid=sha, object_type="commit", source="local")]
+    return [RepoRef(ref_name="refs/stash", target_oid=sha, object_type="commit", source="stash")]

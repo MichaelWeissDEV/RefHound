@@ -18,8 +18,8 @@ Inherent limits
   be a revoked, expired, fake or example value.
 * **Shallow / partial clones** miss history by definition. Use
   ``--unshallow`` when authorized to fetch full history.
-* **LFS pointers** are detected as pointers, not content, unless LFS
-  objects are fetched explicitly.
+* **LFS pointers** are detected as pointers, not content. RefHound v0.1 never
+  fetches LFS content implicitly or through a public option.
 
 Heuristics are labeled
 ----------------------

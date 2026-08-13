@@ -42,6 +42,8 @@ Global exit codes
      - Git, repository or provider error
    * - ``4``
      - Internal error
+   * - ``5``
+     - Scan completed with recoverable component failures; results are incomplete
 
 scan
 ----
@@ -60,14 +62,16 @@ Options:
 * ``--deep`` - shorthand for ``--profile deep``.
 * ``--forensic`` - shorthand for ``--profile forensic``.
 * ``--max-blob-size N`` - skip blobs larger than N bytes (default 5 MiB).
-* ``--jobs N`` - parallel workers (default: ``min(cpu, 8)``).
 * ``--fail-on SEVERITY`` - exit ``1`` if any finding reaches this severity.
 * ``--baseline FILE`` - suppress findings listed in a baseline file.
 * ``--format table|json|sarif|markdown`` - output format (default ``table``).
 * ``--output, -o FILE`` - write output to a file.
 * ``--unshallow`` - fetch full history if the repository is shallow.
 * ``--include-vendor`` - also scan vendored/dependency content.
-* ``--fetch-lfs`` - explicitly fetch LFS content (slow).
+* ``--refresh-remote`` - fetch/prune an existing mirror before scanning;
+  implies a new analysis.
+* ``--offline`` - prohibit network acquisition; fails if a remote mirror is
+  not already cached.
 * ``--fresh`` - ignore the cached result and run a new analysis.
 * ``--debug`` - show full stack traces.
 
@@ -319,6 +323,23 @@ Focused analyses.
 
 ``analyze churn`` finds files/secrets that were added and removed within a
 short window.
+
+cache
+-----
+
+Inspect and maintain only RefHound's remote mirror cache:
+
+.. code-block:: console
+
+   $ refhound cache info [--json]
+   $ refhound cache list [--json]
+   $ refhound cache refresh URL
+   $ refhound cache remove URL
+   $ refhound cache prune [--older-than-days N]
+
+``refresh`` is the only cache subcommand that accesses the network. ``remove``
+and ``prune`` delete only directories under RefHound's platform cache root;
+they never modify the source repository.
 
 Configuration
 -------------

@@ -200,3 +200,8 @@ def path_is_ignored(path: str, ignored: list[str]) -> bool:
         if normalized == rule or normalized.startswith(f"{rule}/"):
             return True
     return False
+
+
+def path_is_excluded(path: str, ignored: list[str], *, include_vendor: bool) -> bool:
+    """Shared scan policy for explicit ignores and vendored content."""
+    return path_is_ignored(path, ignored) or (not include_vendor and is_vendored(path))

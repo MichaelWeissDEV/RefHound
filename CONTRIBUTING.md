@@ -51,8 +51,8 @@ uv run ruff check . && uv run ruff format . && uv run mypy src/refhound && uv ru
 
 ## Documentation
 
-User-facing docs live in `docs/` and are rendered from Markdown. Update
-`docs/index.md` when changing behaviour.
+User-facing docs live in `docs/` and are written in reStructuredText. Update
+`docs/index.rst` and the relevant topic page when changing behaviour.
 
 ## Changelog
 

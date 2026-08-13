@@ -24,6 +24,13 @@ class Base(DeclarativeBase):
     pass
 
 
+class SchemaMetadata(Base):
+    __tablename__ = "schema_metadata"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(64))
+
+
 class RepositoryRecord(Base):
     __tablename__ = "repositories"
 

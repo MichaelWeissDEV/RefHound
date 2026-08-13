@@ -14,11 +14,12 @@ from datetime import datetime
 from refhound.analysis import deletion_analysis
 from refhound.analysis.data import AnalysisData
 from refhound.detectors.base import SecretDetector
-from refhound.git.command import GitRunner
+from refhound.git.command import GitRunner, is_valid_oid
+from refhound.models.diagnostic import DiagnosticSeverity, ScanDiagnostic
 from refhound.models.finding import SecretOccurrence, SecretRecord, SourceState
 from refhound.models.object import BlobRecord
 from refhound.models.secret import DetectorResult
-from refhound.util.paths import looks_binary, mime_hint, path_is_ignored
+from refhound.util.paths import looks_binary, mime_hint, path_is_excluded
 
 logger = logging.getLogger("refhound.scanners.secrets")
 
@@ -40,6 +41,7 @@ def scan_secrets(
     detectors: Sequence[SecretDetector],
     max_blob_size: int,
     binary_scan: bool,
+    include_vendor: bool,
     ignored_paths: list[str] | None = None,
 ) -> None:
     """Scan all unique blobs once and build secret records."""
@@ -47,7 +49,7 @@ def scan_secrets(
     logger.info("secret scanning (%d blobs)", len(data.blobs))
     results_by_blob: dict[str, list[DetectorResult]] = {}
     to_scan = sorted(
-        oid for oid, r in data.blobs.items() if len(oid) == 40 and r.size <= max_blob_size
+        oid for oid, r in data.blobs.items() if is_valid_oid(oid) and r.size <= max_blob_size
     )
     for offset in range(0, len(to_scan), 500):
         chunk = to_scan[offset : offset + 500]
@@ -56,7 +58,10 @@ def scan_secrets(
             record = data.blobs.get(oid)
             if record is None or len(raw) > max_blob_size:
                 continue
-            if ignored and all(path_is_ignored(p, ignored) for p in record.paths):
+            if record.paths and all(
+                path_is_excluded(path, ignored, include_vendor=include_vendor)
+                for path in record.paths
+            ):
                 continue
             import hashlib
 
@@ -74,6 +79,21 @@ def scan_secrets(
                     )
                 except Exception:
                     logger.debug("detector %s failed on blob %s", detector.id, oid, exc_info=True)
+                    data.complete = False
+                    data.failed_detectors[detector.id] = (
+                        data.failed_detectors.get(detector.id, 0) + 1
+                    )
+                    if not any(d.component == detector.id for d in data.diagnostics):
+                        message = f"Detector {detector.id} failed; secret scan is incomplete."
+                        data.diagnostics.append(
+                            ScanDiagnostic(
+                                stage="secret-scan",
+                                component=detector.id,
+                                severity=DiagnosticSeverity.ERROR,
+                                message=message,
+                            )
+                        )
+                        data.scan_warnings.append(message)
             if found:
                 results_by_blob[oid] = found
 
@@ -156,7 +176,7 @@ def _blob_at(git: GitRunner, cwd: str, commit: str, path: str) -> str | None:
     if out.returncode != 0:
         return None
     value = out.stdout.strip()
-    return value if len(value) == 40 else None
+    return value if is_valid_oid(value) else None
 
 
 def _presence_windows(

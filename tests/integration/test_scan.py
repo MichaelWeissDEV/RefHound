@@ -306,3 +306,104 @@ def test_cli_exit_code_mapping() -> None:
     assert _exit_code_for(result, "high") == 0
     assert _exit_code_for(result, "medium") == 1
     assert _exit_code_for(result, None) == 0
+
+
+def test_detector_failure_marks_scan_incomplete(
+    repo: tuple[Path, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, _git = repo
+    from refhound.detectors import registry
+    from refhound.detectors.base import SecretDetector
+
+    class BrokenDetector(SecretDetector):
+        id = "broken"
+        name = "broken"
+        description = "synthetic failure"
+
+        def detect(self, content: bytes, *, path: str | None = None) -> object:
+            raise RuntimeError("SENTINEL_EXCEPTION_SECRET")
+
+    monkeypatch.setattr(registry, "resolve_detectors", lambda **_: [BrokenDetector()])
+    result = _run(path)
+    assert not result.data.complete
+    assert result.data.failed_detectors.get("broken", 0) > 0
+    assert result.data.diagnostics[0].component == "broken"
+    serialized = json_ui.scan_json(result.data, result.options)
+    assert "SENTINEL_EXCEPTION_SECRET" not in serialized
+    assert '"complete": false' in serialized
+    from refhound.cli import _exit_code_for
+
+    assert _exit_code_for(result, None) == 5
+
+
+def test_remote_url_credentials_never_enter_scan_or_storage(
+    repo: tuple[Path, object], tmp_path: Path
+) -> None:
+    path, git = repo
+    sentinel = "SENTINEL_REMOTE_TOKEN"
+    git("remote", "add", "origin", f"https://user:{sentinel}@example.org/repo.git")  # type: ignore[operator]
+    result = _run(path)
+    assert result.data.repo is not None
+    assert sentinel not in result.data.repo.model_dump_json()
+    assert sentinel not in json_ui.scan_json(result.data, result.options)
+    assert sentinel not in markdown_ui.markdown_report(result.data, result.options)
+    assert sentinel not in sarif_ui.sarif_document(result.data, result.options)
+
+    from refhound.storage.database import Database
+
+    db_path = tmp_path / "remote.db"
+    db = Database(db_path)
+    try:
+        db.store_scan(
+            repository=result.repository,
+            scan_id=result.data.scan_id,
+            refs=[ref.model_dump(mode="json") for ref in result.data.refs],
+            commits=len(result.data.commit_graph),
+            snapshot={"repo": result.data.repo.model_dump(mode="json")},
+        )
+    finally:
+        db.close()
+    assert sentinel.encode() not in db_path.read_bytes()
+
+
+def test_vendor_policy_changes_secret_scan(repo: tuple[Path, object]) -> None:
+    path, git = repo
+    vendor = path / "vendor"
+    vendor.mkdir()
+    vendor_secret = "ghp_VENDOR123456789012345678901234567890"
+    (vendor / "dependency.env").write_text(f"token={vendor_secret}\n", encoding="utf-8")
+    git("add", "vendor/dependency.env")  # type: ignore[operator]
+    git("commit", "-q", "-m", "vendor fixture")  # type: ignore[operator]
+    excluded = _run(path)
+    included = _run(path, include_vendor=True)
+    assert all(
+        occurrence.path != "vendor/dependency.env"
+        for secret in excluded.data.secrets
+        for occurrence in secret.occurrences
+    )
+    assert any(
+        occurrence.path == "vendor/dependency.env"
+        for secret in included.data.secrets
+        for occurrence in secret.occurrences
+    )
+
+
+def test_stash_reflog_and_notes_follow_profile_matrix(repo: tuple[Path, object]) -> None:
+    path, git = repo
+    (path / "stash.txt").write_text("stash evidence\n", encoding="utf-8")
+    git("add", "stash.txt")  # type: ignore[operator]
+    git("stash", "push", "-m", "synthetic stash")  # type: ignore[operator]
+    git("notes", "add", "-m", "-----BEGIN PRIVATE KEY----- synthetic")  # type: ignore[operator]
+
+    standard = _run(path, profile="standard")
+    deep = _run(path, profile="deep")
+    forensic = _run(path, profile="forensic")
+
+    assert not any(ref.source in {"stash", "reflog"} for ref in standard.data.refs)
+    assert any(ref.source == "stash" for ref in deep.data.refs)
+    assert any(ref.source == "reflog" for ref in deep.data.refs)
+    assert deep.data.notes == {}
+    assert forensic.data.notes
+    assert any(
+        finding.title == "Potential secret inside git note" for finding in forensic.data.findings
+    )

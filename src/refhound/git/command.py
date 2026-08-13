@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from refhound.errors import GitError, GitNotFoundError
+from refhound.util.sanitize import sanitize_command_args, sanitize_text
 
 logger = logging.getLogger("refhound.git")
 
-_HEX_OID_RE = re.compile(r"^[0-9a-fA-F]{4,64}$")
+_HEX_OID_RE = re.compile(r"^(?:[0-9a-fA-F]{4,40}|[0-9a-fA-F]{64})$")
 
 #: Commands whose stdout may be arbitrarily large; used for streaming callers.
 _BINARY_SAFE = ("cat-file",)
@@ -41,6 +45,15 @@ def validate_oid(value: str) -> str:
     if not isinstance(value, str) or not _HEX_OID_RE.match(value):
         raise ValueError(f"Invalid git object ID: {value!r}")
     return value.lower()
+
+
+def is_valid_oid(value: str) -> bool:
+    """Return whether *value* is an accepted SHA-1/SHA-256 object id."""
+    try:
+        validate_oid(value)
+    except ValueError:
+        return False
+    return True
 
 
 def find_git() -> str:
@@ -119,7 +132,7 @@ class GitRunner:
             command=command,
             args=list(args),
             stdout=proc.stdout.decode("utf-8", errors="replace"),
-            stderr=proc.stderr.decode("utf-8", errors="replace"),
+            stderr=sanitize_text(proc.stderr.decode("utf-8", errors="replace")),
             returncode=proc.returncode,
         )
         if check and proc.returncode != 0:
@@ -148,17 +161,68 @@ class GitRunner:
             stderr=subprocess.PIPE,
             env=env,
         )
+        limit = self.default_timeout if timeout is None else timeout
+        started = time.monotonic()
+        output: queue.Queue[bytes | None] = queue.Queue(maxsize=128)
+        stderr_chunks: list[bytes] = []
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        stdout_pipe = proc.stdout
+        stderr_pipe = proc.stderr
+
+        def _read_stdout() -> None:
+            try:
+                for line in stdout_pipe:
+                    output.put(line)
+            finally:
+                output.put(None)
+
+        def _read_stderr() -> None:
+            for chunk in iter(lambda: stderr_pipe.read(65536), b""):
+                stderr_chunks.append(chunk)
+
+        stdout_thread = threading.Thread(target=_read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
         try:
-            assert proc.stdout is not None
-            yield from proc.stdout
-            proc.stdout.close()
-            assert proc.stderr is not None
-            stderr = proc.stderr.read().decode("utf-8", errors="replace")
-            returncode = proc.wait(timeout=timeout or self.default_timeout)
-        except subprocess.TimeoutExpired as exc:
-            proc.kill()
-            proc.wait()
-            raise GitError(f"git command timed out: {self._describe(args)}") from exc
+            while True:
+                remaining = limit - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise GitError(
+                        f"git command timed out after {limit}s: {self._describe(args)}",
+                        command=self._describe(args),
+                    )
+                try:
+                    item = output.get(timeout=min(remaining, 0.1))
+                except queue.Empty:
+                    if proc.poll() is not None and not stdout_thread.is_alive():
+                        break
+                    continue
+                if item is None:
+                    break
+                yield item
+            remaining = max(0.0, limit - (time.monotonic() - started))
+            try:
+                returncode = proc.wait(timeout=remaining)
+            except subprocess.TimeoutExpired as exc:
+                raise GitError(
+                    f"git command timed out after {limit}s: {self._describe(args)}",
+                    command=self._describe(args),
+                ) from exc
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            stdout_pipe.close()
+            stderr_pipe.close()
+            stdout_thread.join(timeout=1.0)
+            stderr_thread.join(timeout=1.0)
+        stderr = sanitize_text(b"".join(stderr_chunks).decode("utf-8", errors="replace"))
         if returncode != 0:
             raise GitError(
                 f"git {self._describe(args)} failed (exit {returncode}): {stderr.strip()[:500]}",
@@ -180,7 +244,8 @@ class GitRunner:
         if not oids:
             return {}
         flag = "--batch" if content else "--batch-check"
-        request = "\n".join(oids)
+        validated = [validate_oid(oid) for oid in oids]
+        request = "\n".join(validated)
         if not request.endswith("\n"):
             request += "\n"
         env = self._env or os.environ.copy()
@@ -197,7 +262,7 @@ class GitRunner:
         if proc.returncode != 0:
             raise GitError(
                 f"git cat-file {flag} failed",
-                stderr=proc.stderr.decode("utf-8", errors="replace"),
+                stderr=sanitize_text(proc.stderr.decode("utf-8", errors="replace")),
             )
         out = proc.stdout
         results: dict[str, bytes] = {}
@@ -221,4 +286,4 @@ class GitRunner:
 
     @staticmethod
     def _describe(args: Sequence[str]) -> str:
-        return " ".join(str(a) for a in args)
+        return " ".join(sanitize_command_args(args))

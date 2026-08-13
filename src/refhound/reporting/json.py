@@ -14,6 +14,7 @@ from refhound.analysis.data import AnalysisData
 from refhound.config import ScanOptions
 from refhound.models.finding import Finding, SecretRecord
 from refhound.reporting.statistics import compute_statistics
+from refhound.util.sorting import finding_sort_key
 
 
 def _finding_json(finding: Finding) -> dict[str, Any]:
@@ -86,6 +87,7 @@ def scan_json(data: AnalysisData, options: ScanOptions, *, include_secrets: bool
     """Serialize a full scan to JSON."""
     stats = compute_statistics(data)
     payload: dict[str, Any] = {
+        "schema_version": "1",
         "refhound_version": _version(),
         "scan_id": data.scan_id,
         "scan_timestamp": data.scan_timestamp,
@@ -96,15 +98,13 @@ def scan_json(data: AnalysisData, options: ScanOptions, *, include_secrets: bool
             "remote_url": data.repo.remote_url if data.repo else None,
             "head_sha": data.repo.head_sha if data.repo else None,
             "shallow": data.repo.shallow if data.repo else False,
+            "object_format": data.repo.object_format if data.repo else None,
+            "acquisition_mode": data.repo.acquisition_mode if data.repo else None,
+            "mirror_identifier": data.repo.mirror_identifier if data.repo else None,
+            "last_fetch_timestamp": _iso(data.repo.last_fetch_timestamp) if data.repo else None,
         },
         "statistics": stats.model_dump(mode="json"),
-        "findings": [
-            _finding_json(f)
-            for f in sorted(
-                data.findings,
-                key=lambda f: (f.severity.value, -f.score),
-            )
-        ],
+        "findings": [_finding_json(f) for f in sorted(data.findings, key=finding_sort_key)],
         "secrets": [_secret_json(s) for s in data.secrets] if include_secrets else [],
         "lost_chains": [
             {
@@ -134,8 +134,30 @@ def scan_json(data: AnalysisData, options: ScanOptions, *, include_secrets: bool
             for r in data.refs
         ],
         "warnings": list(data.scan_warnings),
+        "complete": data.complete,
+        "diagnostics": [d.model_dump(mode="json") for d in data.diagnostics],
+        "failed_detectors": dict(sorted(data.failed_detectors.items())),
     }
     return json.dumps(payload, indent=2, sort_keys=False)
+
+
+def findings_json(
+    data: AnalysisData,
+    findings: list[Finding],
+    *,
+    severity: str | None = None,
+    category: str | None = None,
+    score_min: int | None = None,
+) -> str:
+    """Serialize the filtered findings command's stable, narrow schema."""
+    payload = {
+        "schema_version": "1",
+        "refhound_version": _version(),
+        "repository": data.repo.remote_url or data.repo.path if data.repo else None,
+        "filters": {"severity": severity, "category": category, "score_min": score_min},
+        "findings": [_finding_json(item) for item in sorted(findings, key=finding_sort_key)],
+    }
+    return json.dumps(payload, indent=2)
 
 
 def _version() -> str:

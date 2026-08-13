@@ -17,6 +17,18 @@ REDACT_SUFFIX_LEN = 4
 MIN_SECRET_LENGTH = 8
 
 
+def redacted_fragments(value: str) -> tuple[str, str]:
+    """Return the only secret fragments allowed to cross detector boundaries.
+
+    Values at or below the safety boundary expose no source characters.  Keep
+    this decision here so models, reports, and storage cannot accidentally
+    implement subtly different masking rules.
+    """
+    if len(value) <= MIN_SECRET_LENGTH:
+        return "", ""
+    return value[:REDACT_PREFIX_LEN], value[-REDACT_SUFFIX_LEN:]
+
+
 def sha256_hex(data: bytes) -> str:
     """Return lowercase hex SHA-256 of ``data``."""
     return hashlib.sha256(data).hexdigest()
@@ -41,13 +53,17 @@ def redact_secret(value: str) -> str:
     The full value never leaves this function. Short values are only shown
     via their fingerprint prefix to avoid trivial reconstruction.
     """
-    if not value:
-        return "<empty>"
     if len(value) <= MIN_SECRET_LENGTH:
         return f"<redacted:{fingerprint_secret(value)[:12]}>"
-    head = value[:REDACT_PREFIX_LEN]
-    tail = value[-REDACT_SUFFIX_LEN:]
+    head, tail = redacted_fragments(value)
     return f"{head}…{tail}"
+
+
+def redacted_label(prefix: str, suffix: str, fingerprint: str) -> str:
+    """Render already-redacted model fields without assuming fragments exist."""
+    if not prefix and not suffix:
+        return f"<redacted:{fingerprint[:12]}>"
+    return f"{prefix}…{suffix}"
 
 
 def sha256_fingerprint(data: bytes) -> str:

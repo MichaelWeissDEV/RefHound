@@ -14,7 +14,7 @@ from typing import ClassVar
 
 from refhound.models.finding import Confidence, Severity
 from refhound.models.secret import DetectorResult
-from refhound.util.hashing import fingerprint_secret
+from refhound.util.hashing import fingerprint_secret, redacted_fragments
 
 
 class SecretDetector(ABC):
@@ -46,11 +46,12 @@ class SecretDetector(ABC):
         confidence: Confidence | None = None,
         extra: dict[str, str] | None = None,
     ) -> DetectorResult:
+        prefix, suffix = redacted_fragments(value)
         return DetectorResult(
             detector_id=self.id,
             secret_fingerprint=fingerprint_secret(value),
-            prefix=_prefix(value),
-            suffix=_suffix(value),
+            prefix=prefix,
+            suffix=suffix,
             line=line,
             char_offset=char_offset,
             category=self.category,
@@ -59,14 +60,6 @@ class SecretDetector(ABC):
             key=key,
             extra=extra or {},
         )
-
-
-def _prefix(value: str) -> str:
-    return value[:4]
-
-
-def _suffix(value: str) -> str:
-    return value[-4:]
 
 
 class PatternDetector(SecretDetector):

@@ -25,32 +25,24 @@ from refhound.errors import ConfigError
 @dataclass(slots=True)
 class ScanProfile:
     name: str
-    reachable_history: bool = True
     unreachable_objects: bool = False
     reflogs: bool = False
-    provider_metadata: bool = False
     secret_scan: bool = True
     entropy_scan: bool = True
     binary_scan: bool = False
     stash: bool = False
     notes: bool = False
-    lfs: bool = False
-    submodules: bool = False
 
     def with_overrides(self, **kwargs: bool) -> ScanProfile:
         merged = ScanProfile(
             name=self.name,
-            reachable_history=self.reachable_history,
             unreachable_objects=self.unreachable_objects,
             reflogs=self.reflogs,
-            provider_metadata=self.provider_metadata,
             secret_scan=self.secret_scan,
             entropy_scan=self.entropy_scan,
             binary_scan=self.binary_scan,
             stash=self.stash,
             notes=self.notes,
-            lfs=self.lfs,
-            submodules=self.submodules,
         )
         for key, value in kwargs.items():
             if hasattr(merged, key):
@@ -59,16 +51,21 @@ class ScanProfile:
 
 
 PROFILES: dict[str, ScanProfile] = {
-    "quick": ScanProfile(name="quick", unreachable_objects=False, reflogs=False, entropy_scan=True),
+    "quick": ScanProfile(
+        name="quick",
+        unreachable_objects=False,
+        reflogs=False,
+        entropy_scan=False,
+        stash=False,
+        notes=False,
+    ),
     "standard": ScanProfile(name="standard"),
     "deep": ScanProfile(
         name="deep",
         unreachable_objects=True,
         reflogs=True,
         stash=True,
-        notes=True,
-        lfs=True,
-        submodules=True,
+        notes=False,
         binary_scan=True,
     ),
     "forensic": ScanProfile(
@@ -77,10 +74,7 @@ PROFILES: dict[str, ScanProfile] = {
         reflogs=True,
         stash=True,
         notes=True,
-        lfs=True,
-        submodules=True,
         binary_scan=True,
-        provider_metadata=True,
     ),
 }
 
@@ -96,12 +90,12 @@ class IgnoreRules:
 class ScanOptions:
     profile: ScanProfile = field(default_factory=lambda: PROFILES["standard"])
     max_blob_size: int = 5 * 1024 * 1024
-    jobs: int | None = None
     fail_on: str | None = None
     baseline_path: str | None = None
-    fetch_lfs: bool = False
     unshallow: bool = False
     include_vendor: bool = False
+    refresh_remote: bool = False
+    offline: bool = False
     json_output: bool = False
     debug: bool = False
     ignore: IgnoreRules = field(default_factory=IgnoreRules)
@@ -112,10 +106,10 @@ class ScanOptions:
             {
                 "profile": asdict(self.profile),
                 "max_blob_size": self.max_blob_size,
-                "jobs": self.jobs,
-                "fetch_lfs": self.fetch_lfs,
                 "unshallow": self.unshallow,
                 "include_vendor": self.include_vendor,
+                "refresh_remote": self.refresh_remote,
+                "offline": self.offline,
                 "ignore": asdict(self.ignore),
             },
             sort_keys=True,
@@ -128,9 +122,9 @@ class ScanOptions:
         payload = json.dumps(
             {
                 "max_blob_size": self.max_blob_size,
-                "fetch_lfs": self.fetch_lfs,
                 "unshallow": self.unshallow,
                 "include_vendor": self.include_vendor,
+                "offline": self.offline,
                 "ignore": asdict(self.ignore),
             },
             sort_keys=True,
@@ -160,14 +154,11 @@ def load_config_file(path: str | Path) -> dict[str, Any]:
 def options_from_config(data: dict[str, Any], options: ScanOptions) -> ScanOptions:
     """Apply repository configuration onto CLI-provided options."""
     scan = data.get("scan", {})
-    if isinstance(scan, dict):
-        if "max_blob_size" in scan:
-            value = scan["max_blob_size"]
-            if not isinstance(value, int) or value <= 0:
-                raise ConfigError("scan.max_blob_size must be a positive integer")
-            options.max_blob_size = value
-        if "jobs" in scan:
-            options.jobs = int(scan["jobs"])
+    if isinstance(scan, dict) and "max_blob_size" in scan:
+        value = scan["max_blob_size"]
+        if not isinstance(value, int) or value <= 0:
+            raise ConfigError("scan.max_blob_size must be a positive integer")
+        options.max_blob_size = value
     ignore = data.get("ignore", {})
     if isinstance(ignore, dict):
         options.ignore.paths = list(ignore.get("paths", []))

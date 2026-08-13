@@ -17,6 +17,7 @@ from refhound.models.anomaly import (
     TimelineRow,
 )
 from refhound.models.commit import CommitInfo, IdentitySet
+from refhound.models.diagnostic import ScanDiagnostic
 from refhound.models.finding import Finding, SecretRecord
 from refhound.models.object import BlobRecord, DanglingObject, LostCommitChain
 from refhound.models.repository import RepoRef, RepositoryInfo
@@ -52,6 +53,9 @@ class AnalysisData:
     notes: dict[str, bytes] = field(default_factory=dict)
     fingerprint: object | None = None
     scan_warnings: list[str] = field(default_factory=list)
+    complete: bool = True
+    diagnostics: list[ScanDiagnostic] = field(default_factory=list)
+    failed_detectors: dict[str, int] = field(default_factory=dict)
     temporal_anomalies: list[TemporalAnomaly] = field(default_factory=list)
     identity_anomalies: list[IdentityAnomaly] = field(default_factory=list)
     ref_transitions: list[RefTransition] = field(default_factory=list)

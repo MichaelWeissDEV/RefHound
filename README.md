@@ -56,11 +56,14 @@ Completed scans are persisted locally. Run `refhound scan URL --deep` once;
 all reporting and analysis commands then reuse its complete snapshot while
 refs and relevant settings remain unchanged. `scan` itself also uses the
 cache unless `--fresh` is passed. Remote mirrors are reused and are not
-automatically downloaded again. Only redacted secret metadata is stored.
+automatically downloaded again. Use `--refresh-remote` to fetch/prune a
+mirror, `--fresh` to rerun analysis without fetching, and `--offline` to
+prohibit network acquisition. Full secret values are never stored; scan,
+repository, commit, author, finding, and redacted secret metadata are.
 
 Exit codes: `0` clean / `1` findings above `--fail-on` threshold / `2` usage
 or configuration error / `3` git, repository or provider error / `4`
-internal error.
+internal error / `5` scan incomplete because a recoverable component failed.
 
 ## Project structure
 
@@ -76,7 +79,7 @@ refhound/
 |   |-- detectors/       secret detectors
 |   |-- scanners/        scan pipeline stages
 |   |-- analysis/        correlation, scoring, anomaly analysis
-|   |-- providers/       GitHub/GitLab adapters (optional)
+|   |-- providers/       internal GitHub/GitLab adapter scaffold (not public in v0.1)
 |   |-- storage/         SQLite persistence (SQLAlchemy)
 |   |-- reporting/       console, JSON, Markdown, SARIF
 |   `-- util/            hashing, redaction, date/path helpers

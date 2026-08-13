@@ -9,9 +9,10 @@ from pathlib import Path
 
 from platformdirs import user_cache_dir
 
-from refhound.errors import RepositoryNotFoundError
+from refhound.errors import RepositoryError, RepositoryNotFoundError
 from refhound.git.command import GitRunner, validate_oid
 from refhound.models.repository import RepositoryInfo, RepositoryOrigin
+from refhound.util.sanitize import sanitize_remote_url
 
 logger = logging.getLogger("refhound.git.repo")
 
@@ -25,7 +26,7 @@ def cache_root() -> Path:
 
 def remote_slug(url: str) -> str:
     """Stable hash-based identifier for a remote URL."""
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(sanitize_remote_url(url).encode("utf-8")).hexdigest()[:16]
     return f"remote-{digest}"
 
 
@@ -36,7 +37,11 @@ def _is_mirrorable(url: str) -> bool:
 def resolve_target(target: str, *, git: GitRunner | None = None) -> RepositoryInfo:
     """Determine what ``target`` refers to (local dir or remote URL)."""
     if _looks_like_remote_url(target):
-        return RepositoryInfo(path=target, origin=RepositoryOrigin.CLONE, remote_url=target)
+        return RepositoryInfo(
+            path=sanitize_remote_url(target),
+            origin=RepositoryOrigin.CLONE,
+            remote_url=sanitize_remote_url(target),
+        )
     return open_repository(target, git=git)
 
 
@@ -44,7 +49,13 @@ def _looks_like_remote_url(value: str) -> bool:
     return value.startswith(("http://", "https://", "ssh://", "git://", "git@"))
 
 
-def prepare_remote(target: str, git: GitRunner | None = None) -> Path:
+def prepare_remote(
+    target: str,
+    git: GitRunner | None = None,
+    *,
+    refresh: bool = False,
+    offline: bool = False,
+) -> Path:
     """Clone a remote URL into a mirror cache directory.
 
     Prefers ``--mirror`` (bare, no working tree, all refs fetchable).
@@ -53,13 +64,22 @@ def prepare_remote(target: str, git: GitRunner | None = None) -> Path:
     git = git or GitRunner()
     root = cache_root() / "mirrors"
     root.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        root.chmod(0o700)
     slug = remote_slug(target)
     dest = root / slug
 
     # Reuse an existing mirror if present and healthy.
     if (dest / "HEAD").exists() and (dest / "objects").exists():
         logger.debug("reusing cached mirror %s", dest)
+        if refresh:
+            if offline:
+                raise RepositoryError("--refresh-remote cannot be combined with --offline")
+            logger.info("refreshing cached mirror %s", dest)
+            git.run("remote", "update", "--prune", cwd=dest, timeout=900.0)
     else:
+        if offline:
+            raise RepositoryError("remote mirror is not cached; offline acquisition is impossible")
         logger.info("cloning %s (mirror) to %s", target, dest)
         git.run("clone", "--mirror", target, str(dest), timeout=900.0)
     return dest
@@ -119,7 +139,7 @@ def open_repository(
 
     try:
         remote = git.run("remote", "get-url", "origin", cwd=target).stdout.strip()
-        info.remote_url = remote or None
+        info.remote_url = sanitize_remote_url(remote) if remote else None
     except Exception:
         info.remote_url = None
 
@@ -128,6 +148,11 @@ def open_repository(
         info.version = version.replace("git version ", "")
     except Exception:
         info.version = ""
+
+    object_format = git.run(
+        "rev-parse", "--show-object-format", cwd=target, check=False
+    ).stdout.strip()
+    info.object_format = object_format if object_format in {"sha1", "sha256"} else "sha1"
 
     if info.shallow:
         logger.warning(

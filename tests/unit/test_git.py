@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+import sys
+import time
+
+import pytest
+
 from refhound.git.command import GitRunner, validate_oid
 from refhound.git.graph import components, find_heads, find_roots, is_ancestor, merge_commits
 from refhound.models.commit import CommitInfo
 
 
 def test_validate_oid() -> None:
+    assert validate_oid("a" * 4) == "a" * 4
     assert validate_oid("a" * 40) == "a" * 40
-    try:
-        validate_oid("not-an-oid")
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
+    assert validate_oid("A" * 64) == "a" * 64
+    for invalid in (
+        "--help",
+        "-option",
+        "HEAD^{tree}",
+        "../",
+        "a b",
+        "a\n",
+        "a\x00b",
+        "a" * 3,
+        "a" * 41,
+        "g" * 40,
+    ):
+        with pytest.raises(ValueError):
+            validate_oid(invalid)
 
 
 def test_parse_raw_commit() -> None:
@@ -69,3 +85,51 @@ def test_merge_commits() -> None:
 def test_run_git_version() -> None:
     out = GitRunner().run("--version")
     assert out.stdout.startswith("git version")
+
+
+def _python_runner() -> GitRunner:
+    return GitRunner(git=sys.executable, default_timeout=0.25)
+
+
+def test_stream_timeout_starts_at_process_start() -> None:
+    runner = _python_runner()
+    started = time.monotonic()
+    with pytest.raises(Exception, match="timed out"):
+        list(runner.stream("-c", "import time; time.sleep(2)"))
+    assert time.monotonic() - started < 1.5
+
+
+def test_stream_partial_output_then_timeout() -> None:
+    runner = _python_runner()
+    iterator = runner.stream("-c", "import sys,time; print('first', flush=True); time.sleep(2)")
+    assert next(iterator) == b"first\n"
+    with pytest.raises(Exception, match="timed out"):
+        next(iterator)
+
+
+def test_stream_drains_large_stderr_and_reports_nonzero() -> None:
+    runner = GitRunner(git=sys.executable, default_timeout=2)
+    with pytest.raises(Exception, match="exit 7"):
+        list(runner.stream("-c", "import sys; sys.stderr.write('x'*200000); sys.exit(7)"))
+
+
+def test_stream_consumer_close_terminates_process() -> None:
+    runner = GitRunner(git=sys.executable, default_timeout=2)
+    iterator = runner.stream("-c", "import time; print('first', flush=True); time.sleep(10)")
+    assert next(iterator) == b"first\n"
+    started = time.monotonic()
+    iterator.close()
+    assert time.monotonic() - started < 1.5
+
+
+def test_batch_cat_file_rejects_revision_expressions() -> None:
+    with pytest.raises(ValueError):
+        GitRunner().batch_cat_file(["HEAD^{tree}"])
+
+
+def test_command_description_sanitizes_remote_credentials() -> None:
+    described = GitRunner._describe(
+        ("clone", "https://user:SENTINEL_TOKEN@example.org/repo.git?token=SENTINEL_TOKEN")
+    )
+    assert "SENTINEL_TOKEN" not in described
+    assert "user:" not in described

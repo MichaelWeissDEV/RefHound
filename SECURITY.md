@@ -7,12 +7,29 @@ RefHound is a defensive analysis tool. Its core security model is:
 * **Secrets are redacted at the source.** Detectors return only a prefix,
   a suffix, a category and a content-derived fingerprint (`sec_…`). The full
   value never leaves the detection layer.
-* **Nothing is persisted.** Console output, JSON, Markdown, SARIF reports,
-  the SQLite database and logs contain fingerprints and redacted fragments
-  only. There is a test that asserts the full test token never appears in
-  any report format or the database (`tests/integration/test_scan.py`).
+* **Full secret values are never persisted.** RefHound does persist scan
+  metadata, repository/ref information, commit metadata, findings, author
+  identities, fingerprints, and safe redacted fragments in SQLite and
+  reports. Treat those artifacts as security-sensitive forensic data.
 * **Short secrets** (at or below `MIN_SECRET_LENGTH = 8`) are shown only as
   `<redacted:sec_…>` to avoid trivial reconstruction from a short mask.
+
+### Fingerprint privacy tradeoff
+
+Version 0.1 uses a stable, unsalted SHA-256 fingerprint. This enables stable
+finding IDs and cross-scan baselines, but a party holding a report can test
+low-entropy password guesses offline. Fingerprints must therefore be treated
+as sensitive data. A future schema may introduce installation-keyed HMAC
+fingerprints; that requires an explicit migration and is not silently mixed
+with version-0.1 fingerprints.
+
+### Remote authentication
+
+HTTP/SSH URL userinfo and credential-like query parameters are removed by one
+central sanitizer before URLs enter reports, models, logs, or exceptions.
+Prefer Git Credential Manager or SSH configuration over credentials embedded
+in a command-line URL, because process listings and shell history are outside
+RefHound's control.
 
 ## What RefHound will never do
 

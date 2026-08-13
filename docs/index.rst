@@ -22,11 +22,19 @@ authorized to analyse.
    :caption: Contents
 
    installation
+   concepts
+   scanning
    usage
    design
    detectors
+   reports
+   configuration
+   methodology
+   performance
    limitations
    security
+   troubleshooting
+   compatibility
    development
 
 Concepts
@@ -52,16 +60,51 @@ Profiles
 .. list-table::
    :header-rows: 1
 
-   * - Profile
-     - Scope
-   * - ``quick``
-     - Refs plus current-tree secrets. Fastest.
-   * - ``standard``
-     - Default. Reachable history, secrets, basic archaeology.
-   * - ``deep``
-     - Adds unreachable/lost-chain reconstruction, churn, anomalies.
-   * - ``forensic``
-     - Everything, including reflogs, notes, submodules and LFS pointers.
+   * - Stage
+     - quick
+     - standard
+     - deep
+     - forensic
+   * - Refs and reachable history
+     - yes
+     - yes
+     - yes
+     - yes
+   * - Pattern secret detectors
+     - yes
+     - yes
+     - yes
+     - yes
+   * - Entropy detector
+     - no
+     - yes
+     - yes
+     - yes
+   * - Unreachable objects / lost chains
+     - no
+     - no
+     - yes
+     - yes
+   * - Reflogs and stash refs
+     - no
+     - no
+     - yes
+     - yes
+   * - Binary blob scan
+     - no
+     - no
+     - yes
+     - yes
+   * - Git notes
+     - no
+     - no
+     - no
+     - yes
+
+LFS content, submodule traversal and provider APIs are not supported public
+pipeline stages in v0.1. LFS pointer files and ``.gitmodules`` remain visible
+to ordinary history/file analysis, but RefHound does not fetch or recursively
+scan their external content.
 
 Quick start
 -----------

@@ -1,7 +1,7 @@
 """Git LFS inventory.
 
-Detection is text-based (LFS pointers are plain text). Content is only
-read when the user explicitly opts in via ``--fetch-lfs``.
+Detection is text-based (LFS pointers are plain text). RefHound v0.1 never
+fetches external LFS payloads.
 """
 
 from __future__ import annotations
