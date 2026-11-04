@@ -113,14 +113,21 @@ jobs:
       - name: Create release with all artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job does not check out the repository, so gh needs the repo name.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           mapfile -t assets < <(find release-assets -type f)
+          case "$GITHUB_REF_NAME" in
+            *a[0-9]*|*b[0-9]*|*rc[0-9]*) flags=(--prerelease) ;;
+            *) flags=() ;;
+          esac
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "RefHound $GITHUB_REF_NAME" \
               --generate-notes \
+              "${flags[@]}" \
               "${assets[@]}"
           fi
