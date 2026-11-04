@@ -112,7 +112,7 @@ jobs:
               python3-sqlalchemy python3-platformdirs python3-httpx python3-pyyaml
           else
             zypper --non-interactive install git tar gzip rpm-build python3-devel \
-              python-rpm-macros python3-hatchling python3-typer \
+              python-rpm-macros python3-pip python3-hatchling python3-typer \
               python3-rich python3-pydantic python3-SQLAlchemy python3-platformdirs \
               python3-httpx python3-PyYAML
           fi
@@ -125,7 +125,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git archive --format=tar.gz --prefix="RefHound-$version/" \
             -o "$HOME/rpmbuild/SOURCES/refhound-$version.tar.gz" HEAD
-          rpmbuild -ba --nodeps packaging/rpm/refhound.spec
+          rpmbuild --define "_topdir $HOME/rpmbuild" -ba --nodeps packaging/rpm/refhound.spec
 
           mkdir -p artifacts/${{ matrix.artifact }}
           cp "$HOME"/rpmbuild/RPMS/noarch/*.rpm artifacts/${{ matrix.artifact }}/
@@ -133,7 +133,7 @@ jobs:
           if command -v dnf >/dev/null; then
             dnf install -y artifacts/${{ matrix.artifact }}/*.rpm
           else
-            zypper --non-interactive --allow-unsigned-rpm install artifacts/${{ matrix.artifact }}/*.rpm
+            zypper --non-interactive install --allow-unsigned-rpm artifacts/${{ matrix.artifact }}/*.rpm
           fi
           refhound --version
           refhound scan --help >/dev/null

@@ -17,5 +17,14 @@ build/
 .coverage
 coverage.xml
 
+# Debian build output
+.pybuild/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/refhound/
+debian/*.substvars
+debian/*.debhelper
+
 # OS
 .DS_Store

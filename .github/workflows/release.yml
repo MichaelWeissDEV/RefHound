@@ -71,7 +71,7 @@ jobs:
 
   pypi:
     name: Publish to PyPI
-    needs: [build, verify-install]
+    needs: [build, verify-install, packages]
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.publish_pypi) ||
       (github.event_name == 'push' && vars.PUBLISH_TO_PYPI == 'true')
