@@ -25,6 +25,7 @@ authorized to analyse.
    concepts
    scanning
    usage
+   api
    design
    detectors
    reports

@@ -63,6 +63,16 @@ class ScanResult:
     def findings_sorted(self) -> list[Finding]:
         return sorted(self.data.findings, key=finding_sort_key)
 
+    @property
+    def findings(self) -> list[Finding]:
+        """Findings ordered by severity and score (public API convenience)."""
+        return self.findings_sorted
+
+    @property
+    def complete(self) -> bool:
+        """Whether every requested stage completed without detector failures."""
+        return self.data.complete
+
 
 def _repo_display(repo: RepositoryInfo) -> str:
     return repo.remote_url or repo.path

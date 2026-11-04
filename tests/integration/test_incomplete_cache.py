@@ -76,8 +76,10 @@ def test_incomplete_state_survives_snapshot_round_trip(
     result = cli._load_or_run(str(path), options, fresh=True)
     assert result.data.complete is False
 
-    snapshot = cli._snapshot(result, {})
-    restored = cli._result_from_snapshot(snapshot, options)
+    from refhound.snapshots import build_snapshot, result_from_snapshot
+
+    snapshot = build_snapshot(result, {})
+    restored = result_from_snapshot(snapshot, options)
     assert restored.data.complete is False
     assert restored.data.failed_detectors["broken"] == result.data.failed_detectors["broken"]
     assert restored.data.diagnostics[0].component == "broken"

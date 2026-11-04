@@ -16,7 +16,6 @@ import sys
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import typer
 
@@ -35,23 +34,22 @@ from refhound.errors import (
     RepositoryError,
     UsageError,
 )
-from refhound.models.anomaly import ChurnFinding, InterestingCommit, TimelineRow
-from refhound.models.commit import CommitInfo, IdentitySet
-from refhound.models.diagnostic import ScanDiagnostic
+from refhound.models.commit import CommitInfo
 from refhound.models.finding import Finding, FindingCategory, SecretRecord, Severity, SourceState
-from refhound.models.object import DanglingObject, LostCommitChain
-from refhound.models.repository import RepoRef, RepositoryInfo
-from refhound.models.statistics import ObjectStats, RepositoryStatistics
+from refhound.models.object import LostCommitChain
 from refhound.reporting import console as console_ui
 from refhound.reporting import json as json_ui
 from refhound.reporting import markdown as markdown_ui
 from refhound.reporting import sarif as sarif_ui
 from refhound.reporting.statistics import compute_statistics
+from refhound.repository_key import is_remote_target as _is_remote
+from refhound.repository_key import repository_key as _repository_key
 from refhound.scanners.engine import Engine, ScanResult
+from refhound.snapshots import result_from_snapshot as _result_from_snapshot
+from refhound.snapshots import store_scan as _store_scan
 from refhound.storage.database import Database, default_db_path
 from refhound.util.hashing import redacted_label
 from refhound.util.output import secure_write_text
-from refhound.util.sanitize import sanitize_remote_url
 
 app = typer.Typer(help="RefHound - Git repository security and forensic analysis tool.")
 analyze_app = typer.Typer(help="Focused analyses.")
@@ -229,136 +227,6 @@ def _apply_baseline(
     return suppress_with_baseline(findings, baseline)
 
 
-def _store_scan(db: Database | None, repository: str, result: ScanResult) -> None:
-    if db is None:
-        return
-    # Reflog pseudo-refs are forensic evidence, not stable ref tips used for
-    # cache invalidation. Their selectors change independently of ref state.
-    refs = [r.model_dump(mode="json") for r in result.data.refs if r.source != "reflog"]
-    findings = [f.model_dump(mode="json") for f in result.data.findings]
-    secrets = [s.model_dump(mode="json") for s in result.data.secrets]
-    statistics = compute_statistics(result.data).model_dump(mode="json")
-    commit_graph = [
-        commit.model_dump(mode="json", exclude={"body", "message"})
-        for commit in result.data.commit_graph.values()
-    ]
-    db.store_scan(
-        repository=repository,
-        scan_id=result.data.scan_id,
-        refs=refs,
-        commits=len(result.data.commit_graph),
-        findings=findings,
-        snapshot=_snapshot(result, statistics),
-        secrets=secrets,
-        commit_graph=commit_graph,
-        statistics=statistics,
-        profile=result.options.profile.name,
-    )
-
-
-def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
-    """Build the redacted, report-ready representation stored in SQLite."""
-    data = result.data
-    return {
-        "schema_version": 3,
-        "scan_id": data.scan_id,
-        "scan_timestamp": data.scan_timestamp,
-        "profile": result.options.profile.name,
-        "configuration_hash": result.options.hash(),
-        "cache_hash": result.options.cache_hash(),
-        "repository": result.repository,
-        "repo": data.repo.model_dump(mode="json") if data.repo else None,
-        "findings": [f.model_dump(mode="json") for f in data.findings],
-        "secrets": [s.model_dump(mode="json") for s in data.secrets],
-        "lost_chains": [c.model_dump(mode="json") for c in data.lost_chains],
-        "dangling": [d.model_dump(mode="json") for d in data.dangling],
-        "unreachable_oids": sorted(data.unreachable_oids),
-        "reachable_oids": sorted(data.reachable_oids),
-        "refs": [r.model_dump(mode="json") for r in data.refs],
-        "object_stats": data.object_stats.model_dump(mode="json"),
-        "statistics": statistics,
-        "deleted_files": list(data.deleted_files),
-        "scan_warnings": list(data.scan_warnings),
-        "complete": data.complete,
-        "diagnostics": [d.model_dump(mode="json") for d in data.diagnostics],
-        "failed_detectors": dict(sorted(data.failed_detectors.items())),
-        "duration_seconds": result.duration_seconds,
-        "commit_graph": {
-            sha: commit.model_dump(mode="json", exclude={"body", "message"})
-            for sha, commit in data.commit_graph.items()
-        },
-        "timeline": [row.model_dump(mode="json") for row in data.timeline],
-        "interesting": {
-            sha: entry.model_dump(mode="json") for sha, entry in data.interesting.items()
-        },
-        "churn": [entry.model_dump(mode="json") for entry in data.churn],
-        "identities": [identity.model_dump(mode="json") for identity in data.identities],
-        "renamed_files": list(data.renamed_files),
-        "merge_commit_count": data.merge_commit_count,
-        "signed_count": data.signed_count,
-        "unsigned_count": data.unsigned_count,
-        "history_components": data.history_components,
-        "notes_count": len(data.notes),
-    }
-
-
-def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> ScanResult:
-    """Validate and reconstruct report-ready analysis data from a DB snapshot."""
-    if snapshot.get("schema_version") != 3:
-        raise ValueError("unsupported snapshot schema")
-    data = AnalysisData(
-        repo=(RepositoryInfo.model_validate(snapshot["repo"]) if snapshot.get("repo") else None),
-        refs=[RepoRef.model_validate(value) for value in snapshot.get("refs", [])],
-        commit_graph={
-            sha: CommitInfo.model_validate(value)
-            for sha, value in snapshot.get("commit_graph", {}).items()
-        },
-        reachable_oids=set(snapshot.get("reachable_oids", [])),
-        unreachable_oids=set(snapshot.get("unreachable_oids", [])),
-        dangling=[DanglingObject.model_validate(value) for value in snapshot.get("dangling", [])],
-        object_stats=ObjectStats.model_validate(snapshot.get("object_stats", {})),
-        secrets=[SecretRecord.model_validate(value) for value in snapshot.get("secrets", [])],
-        lost_chains=[
-            LostCommitChain.model_validate(value) for value in snapshot.get("lost_chains", [])
-        ],
-        deleted_files=list(snapshot.get("deleted_files", [])),
-        renamed_files=list(snapshot.get("renamed_files", [])),
-        timeline=[TimelineRow.model_validate(value) for value in snapshot.get("timeline", [])],
-        interesting={
-            sha: InterestingCommit.model_validate(value)
-            for sha, value in snapshot.get("interesting", {}).items()
-        },
-        churn=[ChurnFinding.model_validate(value) for value in snapshot.get("churn", [])],
-        identities=[IdentitySet.model_validate(value) for value in snapshot.get("identities", [])],
-        merge_commit_count=int(snapshot.get("merge_commit_count", 0)),
-        signed_count=int(snapshot.get("signed_count", 0)),
-        unsigned_count=int(snapshot.get("unsigned_count", 0)),
-        history_components=int(snapshot.get("history_components", 0)),
-        notes={str(index): b"" for index in range(int(snapshot.get("notes_count", 0)))},
-        findings=[Finding.model_validate(value) for value in snapshot.get("findings", [])],
-        scan_warnings=list(snapshot.get("scan_warnings", [])),
-        complete=snapshot.get("complete", False) is True,
-        diagnostics=[
-            ScanDiagnostic.model_validate(value) for value in snapshot.get("diagnostics", [])
-        ],
-        failed_detectors={
-            str(key): int(value)
-            for key, value in dict(snapshot.get("failed_detectors", {})).items()
-        },
-        scan_id=str(snapshot["scan_id"]),
-        scan_timestamp=str(snapshot["scan_timestamp"]),
-        cached_statistics=RepositoryStatistics.model_validate(snapshot["statistics"]),
-    )
-    started = datetime.fromisoformat(data.scan_timestamp)
-    return ScanResult(
-        data=data,
-        options=options,
-        started=started,
-        duration_seconds=float(snapshot.get("duration_seconds", 0.0)),
-        repository=str(snapshot.get("repository", "")),
-    )
-
-
 def _exit_code_for(result: ScanResult, fail_on: str | None) -> int:
     if not getattr(result.data, "complete", True):
         return 5
@@ -380,34 +248,6 @@ def _exit_code_for(result: ScanResult, fail_on: str | None) -> int:
         if order.get(finding.severity, 0) >= threshold_rank:
             return 1
     return 0
-
-
-def _is_remote(target: str) -> bool:
-    return target.startswith(("http://", "https://", "git@", "ssh://"))
-
-
-def _repository_key(target: str) -> str:
-    if _is_remote(target):
-        # Never persist credentials embedded in a remote URL: the key is
-        # written to SQLite as ``repositories.path``.
-        return sanitize_remote_url(target)
-    from refhound.git.command import GitRunner
-
-    path = Path(target).expanduser().resolve()
-    git = GitRunner()
-    try:
-        root = git.run("rev-parse", "--show-toplevel", cwd=path).stdout.strip()
-        if root:
-            return str(Path(root).resolve())
-    except RefHoundError:
-        pass
-    try:
-        git_dir = git.run("rev-parse", "--absolute-git-dir", cwd=path).stdout.strip()
-        if git_dir:
-            return str(Path(git_dir).resolve())
-    except RefHoundError:
-        pass
-    return str(path)
 
 
 def _current_ref_snapshot(target: str) -> dict[str, str] | None:
@@ -433,11 +273,14 @@ def _profile_covers(stored: object, requested: str) -> bool:
     return isinstance(stored, str) and ranks.get(stored, -1) >= ranks.get(requested, 99)
 
 
-def _load_or_run(path: str, options: ScanOptions, *, fresh: bool = False) -> ScanResult:
+def _load_or_run(
+    path: str, options: ScanOptions, *, fresh: bool = False, store: bool = True
+) -> ScanResult:
     """Load a compatible complete snapshot, otherwise scan and persist one."""
     if not _is_remote(path):
         _ensure(path)
-    if options.debug:
+    if options.debug or not store:
+        # --no-store and --debug are one-shot runs: no cache reads or writes.
         return Engine(options).run(path)
     repository = _repository_key(path)
     db = Database(default_db_path())
@@ -533,6 +376,9 @@ def scan(
         False, "--include-vendor", help="Also scan vendored/dependency content"
     ),
     fresh: bool = typer.Option(False, "--fresh", help="Ignore cached scan results"),
+    no_store: bool = typer.Option(
+        False, "--no-store", help="Do not read or write the local result database"
+    ),
     refresh_remote: bool = typer.Option(
         False, "--refresh-remote", help="Fetch updates into an existing remote mirror"
     ),
@@ -567,7 +413,7 @@ def scan(
     )
 
     try:
-        result = _load_or_run(path, options, fresh=fresh or refresh_remote)
+        result = _load_or_run(path, options, fresh=fresh or refresh_remote, store=not no_store)
     except RefHoundError as exc:
         _fail(exc, debug)
         return
@@ -699,7 +545,8 @@ def _filter_findings(
 ) -> list[Finding]:
     result = findings_list
     if severity:
-        result = [f for f in result if f.severity.value == severity.lower()]
+        selected = _parse_severity(severity)
+        result = [f for f in result if f.severity == selected]
     if category:
         result = [f for f in result if f.category.value == category.lower()]
     if score_min is not None:
@@ -707,6 +554,31 @@ def _filter_findings(
     from refhound.util.sorting import finding_sort_key
 
     return sorted(result, key=finding_sort_key)
+
+
+def _parse_severity(value: str) -> Severity:
+    try:
+        return Severity(value.lower())
+    except ValueError:
+        choices = ", ".join(item.value for item in Severity)
+        raise UsageError(f"unknown severity '{value}'; choose from {choices}") from None
+
+
+def _finding_commits(
+    data: AnalysisData, *, severity: str | None = None, path: str | None = None
+) -> set[str]:
+    """Commits with findings matching the optional severity/path filters."""
+    selected = _parse_severity(severity) if severity else None
+    commits: set[str] = set()
+    for finding in data.findings:
+        if not finding.commit_sha:
+            continue
+        if selected is not None and finding.severity != selected:
+            continue
+        if path and (not finding.path or path not in finding.path):
+            continue
+        commits.add(finding.commit_sha)
+    return commits
 
 
 @app.command()
@@ -977,8 +849,12 @@ def timeline(
     since: str = typer.Option(None, "--from", help="Start date (ISO)"),
     until: str = typer.Option(None, "--to", help="End date (ISO)"),
     author: str = typer.Option(None, "--author", help="Author filter"),
-    path_filter: str = typer.Option(None, "--path", help="Path filter"),
-    severity: str = typer.Option(None, "--severity", help="Severity filter"),
+    path_filter: str = typer.Option(
+        None, "--path", help="Only commits with findings for this path"
+    ),
+    severity: str = typer.Option(
+        None, "--severity", help="Only commits with findings at this severity"
+    ),
     as_json: bool = typer.Option(False, "--json"),
     verbose: int = typer.Option(0, "-v", count=True),
 ) -> None:
@@ -998,6 +874,9 @@ def timeline(
         rows = [r for r in rows if r.timestamp and _leq(r.timestamp, end)]
     if author:
         rows = [r for r in rows if author.lower() in r.author.lower()]
+    if severity or path_filter:
+        matched = _finding_commits(result.data, severity=severity, path=path_filter)
+        rows = [r for r in rows if r.commit in matched]
     if as_json:
         _print_serialized(
             json.dumps(

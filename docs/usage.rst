@@ -73,6 +73,8 @@ Options:
 * ``--offline`` - prohibit network acquisition; fails if a remote mirror is
   not already cached.
 * ``--fresh`` - ignore the cached result and run a new analysis.
+* ``--no-store`` - do not read or write the local result database; intended
+  for one-off analysis of sensitive repositories.
 * ``--debug`` - show full stack traces.
 
 Examples:
@@ -200,8 +202,8 @@ Options:
 * ``--from DATE`` - start date (ISO).
 * ``--to DATE`` - end date (ISO).
 * ``--author FILTER`` - author filter.
-* ``--path PATH`` - path filter.
-* ``--severity SEVERITY`` - severity filter.
+* ``--path PATH`` - only commits that have findings for this path.
+* ``--severity SEVERITY`` - only commits that have findings at this severity.
 * ``--json`` - JSON output.
 
 authors
@@ -351,7 +353,6 @@ A ``.refhound.yml`` file in the repository root can tune a scan. Precedence
 
    scan:
      max_blob_size: 1048576
-     jobs: 4
    ignore:
      paths:
        - vendor/
