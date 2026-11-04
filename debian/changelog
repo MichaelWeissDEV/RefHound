@@ -1,5 +1,8 @@
-refhound (0.1.0~a1-1) unstable; urgency=medium
+refhound (0.1.0~b1-1) unstable; urgency=medium
 
-  * Alpha release with PyPI, Debian and RPM packaging.
+  * First beta release.
+  * Add the public Python API, one-shot --no-store scans, timeline filters
+    and the native packaging pipeline.
+  * Fix CI help rendering and native package builds.
 
  -- Michael Weiss <michael@example.invalid>  Wed, 04 Nov 2026 12:00:00 +0100

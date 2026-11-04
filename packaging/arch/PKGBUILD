@@ -1,6 +1,6 @@
 # Maintainer: Michael Weiss <michael@example.invalid>
 pkgname=refhound
-pkgver=0.1.0a1
+pkgver=0.1.0b1
 pkgrel=1
 pkgdesc="Git repository security and forensic analysis tool"
 arch=('any')
@@ -29,7 +29,8 @@ sha256sums=('SKIP')
 # Local builds (CI) can point at an already-created tarball instead of
 # downloading the release from GitHub.
 if [[ -n ${REFHOUND_LOCAL_TARBALL:-} ]]; then
-  source=("$REFHOUND_LOCAL_TARBALL")
+  # makepkg only accepts local sources as file:// URLs.
+  source=("file://$REFHOUND_LOCAL_TARBALL")
 fi
 
 prepare() {

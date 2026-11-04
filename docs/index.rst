@@ -36,6 +36,7 @@ authorized to analyse.
    security
    troubleshooting
    compatibility
+   releasing
    development
 
 Concepts

@@ -4,7 +4,54 @@ All notable changes to RefHound are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0b1] - 2026-11-04
+
+The first beta. The Python API is still an alpha surface until 1.0, but the
+CLI, package formats and release pipeline are usable.
+
+### Added
+
+- Public Python API in `refhound.api` with `scan_repository()`, typed
+  `ScanOptions` and a documented alpha stability contract.
+- Snapshot serialization moved out of the CLI into `refhound.snapshots`, so
+  library users can persist results without importing Typer or Rich.
+- `scan --no-store` for one-off analysis without database reads or writes.
+- Timeline filters for findings on a path or at a severity.
+- `SHA256SUMS` for every GitHub release asset.
+- Documented PyPI trusted publishing and manual release workflow.
+
+### Changed
+
+- Configuration is validated strictly; unknown keys and mistyped values are
+  errors instead of being ignored.
+- Unsupported `--format` values fail with exit code 2 instead of silently
+  falling back to the default renderer.
+- The package classifier is now `Development Status :: 4 - Beta`.
+
+### Fixed
+
+- Incomplete scans are no longer served from the snapshot cache; completeness,
+  diagnostics and failed detectors are persisted and restored.
+- Remote URL credentials are sanitized before they reach logs, SQLite or
+  repository snapshots, including a migration for existing databases.
+- `--offline` rejects `--unshallow` and `--refresh-remote` before any network
+  call.
+- CI help tests are independent of ANSI styling forced by GitHub Actions.
+- Native package builds work in container jobs: git safe-directory handling,
+  `file://` local sources for `makepkg`, and openSUSE's `python-rpm-macros`
+  package set.
+
+## [0.1.0a1] - 2026-11-04
+
+### Packaging
+
+- Single version source in `src/refhound/_version.py`, read by Hatchling and
+  Sphinx.
+- PyPI-ready wheel and sdist metadata with project URLs and Python 3.13.
+- Arch `PKGBUILD`, Debian packaging and an RPM spec for Fedora, RHEL 10+ and
+  openSUSE, built and smoke-tested in distribution containers.
+- Tag-driven release workflow with isolated wheel verification, GitHub release
+  assets and optional PyPI trusted publishing.
 
 ### Security
 

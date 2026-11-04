@@ -1,7 +1,7 @@
-%global tag_version 0.1.0a1
+%global tag_version 0.1.0b1
 
 Name:           refhound
-Version:        0.1.0~a1
+Version:        0.1.0~b1
 Release:        1%{?dist}
 Summary:        Git repository security and forensic analysis tool
 License:        MIT
@@ -9,7 +9,12 @@ URL:            https://github.com/MichaelWeissDEV/RefHound
 Source0:        %{name}-%{tag_version}.tar.gz
 BuildArch:      noarch
 BuildRequires:  python3-devel
+%if 0%{?suse_version}
+# openSUSE ships the PEP 517 macros in python-rpm-macros.
+BuildRequires:  python-rpm-macros
+%else
 BuildRequires:  pyproject-rpm-macros
+%endif
 
 %description
 RefHound inspects the Git object database and refs to surface information
@@ -39,5 +44,7 @@ attempts to bypass access controls.
 %{_bindir}/refhound
 
 %changelog
+* Wed Nov 04 2026 Michael Weiss <michael@example.invalid> - 0.1.0~b1-1
+- First beta release with the public Python API and PyPI publishing.
 * Wed Nov 04 2026 Michael Weiss <michael@example.invalid> - 0.1.0~a1-1
 - Alpha release with PyPI, Arch, Debian and RPM packaging.

@@ -7,12 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       publish_pypi:
-        description: "Also publish the built distribution to PyPI"
+        description: "Publish the built wheel and sdist to PyPI"
         type: boolean
         default: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -23,6 +27,15 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - name: Verify tag matches the packaged version
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          version=$(python -c "import ast, pathlib; m = ast.parse(pathlib.Path('src/refhound/_version.py').read_text()); print(next(ast.literal_eval(n.value) for n in m.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', '') == '__version__' for t in n.targets)))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match src/refhound/_version.py ($version)" >&2
+            exit 1
+          fi
       - run: uv build
       - run: uv run --isolated --with twine twine check dist/*
       - uses: actions/upload-artifact@v4
@@ -59,26 +72,31 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: [build, verify-install]
-    if: |
-      startsWith(github.ref, 'refs/tags/v') &&
-      (vars.PUBLISH_TO_PYPI == 'true' || inputs.publish_pypi)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish_pypi) ||
+      (github.event_name == 'push' && vars.PUBLISH_TO_PYPI == 'true')
     runs-on: ubuntu-latest
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/p/refhound
     permissions:
       id-token: write
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: python-dist
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          print-hash: true
 
   github-release:
     name: GitHub release
     needs: [build, verify-install, packages]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -86,12 +104,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
       - name: Create release with all artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mapfile -t assets < <(find release-assets -type f)
           gh release create "$GITHUB_REF_NAME" \
             --title "RefHound $GITHUB_REF_NAME" \
             --generate-notes \
-            $(find release-assets -type f)
+            "${assets[@]}"

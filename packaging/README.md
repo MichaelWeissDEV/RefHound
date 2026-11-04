@@ -14,14 +14,14 @@ native Linux packages from the same source tree and version.
 
 ```console
 # Debian / Ubuntu
-$ sudo apt install ./refhound_0.1.0~a1-1_all.deb
+$ sudo apt install ./refhound_0.1.0~b1-1_all.deb
 
 # Fedora / RHEL / openSUSE
-$ sudo dnf install ./refhound-0.1.0~a1-1.noarch.rpm
-$ sudo zypper install ./refhound-0.1.0~a1-1.noarch.rpm
+$ sudo dnf install ./refhound-0.1.0~b1-1.noarch.rpm
+$ sudo zypper install ./refhound-0.1.0~b1-1.noarch.rpm
 
 # Arch Linux
-$ sudo pacman -U ./refhound-0.1.0a1-1-any.pkg.tar.zst
+$ sudo pacman -U ./refhound-0.1.0b1-1-any.pkg.tar.zst
 ```
 
 A `.deb` or `.rpm` file on the GitHub release page is installable this way,
@@ -45,20 +45,20 @@ upload a `SKIP` checksum to the AUR.
 
 ```console
 $ dpkg-buildpackage -us -uc -b
-$ sudo apt install ../refhound_0.1.0~a1-1_all.deb
-$ lintian ../refhound_0.1.0~a1-1_all.deb
+$ sudo apt install ../refhound_0.1.0~b1-1_all.deb
+$ lintian ../refhound_0.1.0~b1-1_all.deb
 ```
 
-Debian versioning uses `~` for pre-releases, so upstream `0.1.0a1` becomes
-`0.1.0~a1`.
+Debian versioning uses `~` for pre-releases, so upstream `0.1.0b1` becomes
+`0.1.0~b1`.
 
 ## Fedora / RHEL / openSUSE
 
 `rpmbuild` needs the source archive in `%{_sourcedir}`:
 
 ```console
-$ git archive --format=tar.gz --prefix=RefHound-0.1.0a1/ \
-    -o ~/rpmbuild/SOURCES/refhound-0.1.0a1.tar.gz HEAD
+$ git archive --format=tar.gz --prefix=RefHound-0.1.0b1/ \
+    -o ~/rpmbuild/SOURCES/refhound-0.1.0b1.tar.gz HEAD
 $ rpmbuild -ba packaging/rpm/refhound.spec
 ```
 
@@ -71,3 +71,6 @@ Publishing to AUR, OBS, COPR or distribution archives is intentionally not
 automated here: it needs maintainer accounts and signing keys. The release
 workflow produces the artifacts and checksums; the repository upload remains
 a manual, reviewed step.
+
+See `docs/releasing.rst` for the PyPI trusted-publisher setup and the exact
+GitHub Actions workflow trigger.
