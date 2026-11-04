@@ -33,13 +33,20 @@ jobs:
 
           # checkout falls back to a source tarball when the image has no git,
           # so build the release tarball from the working tree instead of git.
+          # COPYFILE_DISABLE keeps macOS tar from adding AppleDouble ._ members.
+          export COPYFILE_DISABLE=1
           stage=$(mktemp -d)
-          mkdir -p "$stage/RefHound-$version"
-          cp -a "$GITHUB_WORKSPACE/." "$stage/RefHound-$version/"
-          rm -rf "$stage/RefHound-$version/.git" "$stage/RefHound-$version/artifacts" \
-            "$stage/RefHound-$version/.venv" "$stage/RefHound-$version/dist" \
-            "$stage/RefHound-$version/build" "$stage/RefHound-$version/docs/_build"
-          find "$stage/RefHound-$version" -name __pycache__ -type d -prune -exec rm -rf {} +
+          tree="$stage/RefHound-$version"
+          mkdir -p "$tree"
+          cp -a "$GITHUB_WORKSPACE/." "$tree/"
+          rm -rf "$tree/.git" "$tree/artifacts" "$tree/.venv" "$tree/dist" \
+            "$tree/build" "$tree/docs/_build" "$tree/.pytest_cache" "$tree/.ruff_cache" \
+            "$tree/.mypy_cache" "$tree/.pybuild" "$tree/debian/.debhelper" \
+            "$tree/debian/refhound"
+          find "$tree" -name __pycache__ -type d -prune -exec rm -rf {} +
+          find "$tree" -name '*.egg-info' -type d -prune -exec rm -rf {} +
+          # macOS resource forks, for local runs of this recipe.
+          find "$tree" -name '._*' -delete
           mkdir -p artifacts/source
           tar -czf "artifacts/source/refhound-$version.tar.gz" -C "$stage" "RefHound-$version"
           rm -rf "$stage"
@@ -133,13 +140,20 @@ jobs:
 
           # checkout falls back to a source tarball when the image has no git,
           # so build the release tarball from the working tree instead of git.
+          # COPYFILE_DISABLE keeps macOS tar from adding AppleDouble ._ members.
+          export COPYFILE_DISABLE=1
           stage=$(mktemp -d)
-          mkdir -p "$stage/RefHound-$version"
-          cp -a "$GITHUB_WORKSPACE/." "$stage/RefHound-$version/"
-          rm -rf "$stage/RefHound-$version/.git" "$stage/RefHound-$version/artifacts" \
-            "$stage/RefHound-$version/.venv" "$stage/RefHound-$version/dist" \
-            "$stage/RefHound-$version/build" "$stage/RefHound-$version/docs/_build"
-          find "$stage/RefHound-$version" -name __pycache__ -type d -prune -exec rm -rf {} +
+          tree="$stage/RefHound-$version"
+          mkdir -p "$tree"
+          cp -a "$GITHUB_WORKSPACE/." "$tree/"
+          rm -rf "$tree/.git" "$tree/artifacts" "$tree/.venv" "$tree/dist" \
+            "$tree/build" "$tree/docs/_build" "$tree/.pytest_cache" "$tree/.ruff_cache" \
+            "$tree/.mypy_cache" "$tree/.pybuild" "$tree/debian/.debhelper" \
+            "$tree/debian/refhound"
+          find "$tree" -name __pycache__ -type d -prune -exec rm -rf {} +
+          find "$tree" -name '*.egg-info' -type d -prune -exec rm -rf {} +
+          # macOS resource forks, for local runs of this recipe.
+          find "$tree" -name '._*' -delete
           mkdir -p "$HOME/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
           tar -czf "$HOME/rpmbuild/SOURCES/refhound-$version.tar.gz" -C "$stage" "RefHound-$version"
           rm -rf "$stage"
