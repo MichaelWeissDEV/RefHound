@@ -101,7 +101,12 @@ def test_stream_timeout_starts_at_process_start() -> None:
 
 def test_stream_partial_output_then_timeout() -> None:
     runner = _python_runner()
-    iterator = runner.stream("-c", "import sys,time; print('first', flush=True); time.sleep(2)")
+    # Write bytes directly: text-mode print would emit CRLF on Windows.
+    iterator = runner.stream(
+        "-c",
+        "import sys,time; sys.stdout.buffer.write(b'first\\n'); "
+        "sys.stdout.buffer.flush(); time.sleep(2)",
+    )
     assert next(iterator) == b"first\n"
     with pytest.raises(Exception, match="timed out"):
         next(iterator)
@@ -115,7 +120,11 @@ def test_stream_drains_large_stderr_and_reports_nonzero() -> None:
 
 def test_stream_consumer_close_terminates_process() -> None:
     runner = GitRunner(git=sys.executable, default_timeout=2)
-    iterator = runner.stream("-c", "import time; print('first', flush=True); time.sleep(10)")
+    iterator = runner.stream(
+        "-c",
+        "import sys,time; sys.stdout.buffer.write(b'first\\n'); "
+        "sys.stdout.buffer.flush(); time.sleep(10)",
+    )
     assert next(iterator) == b"first\n"
     started = time.monotonic()
     iterator.close()

@@ -85,7 +85,8 @@ def test_mirror_worktree_and_promisor_detection(tmp_path: Path, monkeypatch) -> 
     _git(source, "worktree", "add", "-q", str(worktree))
     worktree_info = open_repository(worktree, git=GitRunner())
     assert not worktree_info.bare
-    assert worktree_info.work_tree == str(worktree)
+    # Git reports Windows paths with forward slashes; compare as paths.
+    assert Path(worktree_info.work_tree or "") == worktree
 
     config = Path(worktree_info.git_dir) / "config"
     # Linked worktrees share their repository config in the common git dir.
