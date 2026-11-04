@@ -31,7 +31,7 @@ def _shallow_clone(tmp_path: Path) -> Path:
 
     destination = tmp_path / "shallow"
     subprocess.run(
-        ["git", "clone", "-q", "--depth", "1", f"file://{source}", str(destination)],
+        ["git", "clone", "-q", "--depth", "1", source.as_uri(), str(destination)],
         check=True,
         capture_output=True,
     )

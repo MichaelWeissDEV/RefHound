@@ -60,7 +60,7 @@ def test_bare_and_shallow_repository_detection(tmp_path: Path) -> None:
 
     shallow = tmp_path / "shallow"
     subprocess.run(
-        ["git", "clone", "--depth=1", f"file://{source}", str(shallow)],
+        ["git", "clone", "--depth=1", source.as_uri(), str(shallow)],
         check=True,
         capture_output=True,
     )
