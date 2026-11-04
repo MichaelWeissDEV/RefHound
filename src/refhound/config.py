@@ -151,17 +151,49 @@ def load_config_file(path: str | Path) -> dict[str, Any]:
     return data
 
 
+_TOP_LEVEL_KEYS = {"scan", "ignore"}
+_SCAN_KEYS = {"max_blob_size"}
+_IGNORE_KEYS = {"paths", "detectors", "findings"}
+
+
+def _reject_unknown(section: dict[str, Any], allowed: set[str], prefix: str) -> None:
+    unknown = sorted(set(section) - allowed)
+    if unknown:
+        names = ", ".join(f"{prefix}{key}" for key in unknown)
+        raise ConfigError(f"unknown configuration key(s): {names}")
+
+
+def _string_list(section: dict[str, Any], key: str, prefix: str) -> list[str]:
+    value = section.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{prefix}{key} must be a list of strings")
+    return list(value)
+
+
 def options_from_config(data: dict[str, Any], options: ScanOptions) -> ScanOptions:
-    """Apply repository configuration onto CLI-provided options."""
+    """Apply repository configuration onto ``options``.
+
+    Callers that also accept command-line values must apply the configuration
+    first and then overlay the explicit CLI values so that the documented
+    ``CLI > .refhound.yml > defaults`` precedence holds.
+    """
+    _reject_unknown(data, _TOP_LEVEL_KEYS, "")
+
     scan = data.get("scan", {})
-    if isinstance(scan, dict) and "max_blob_size" in scan:
+    if not isinstance(scan, dict):
+        raise ConfigError("scan must be a mapping")
+    _reject_unknown(scan, _SCAN_KEYS, "scan.")
+    if "max_blob_size" in scan:
         value = scan["max_blob_size"]
-        if not isinstance(value, int) or value <= 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ConfigError("scan.max_blob_size must be a positive integer")
         options.max_blob_size = value
+
     ignore = data.get("ignore", {})
-    if isinstance(ignore, dict):
-        options.ignore.paths = list(ignore.get("paths", []))
-        options.ignore.detectors = list(ignore.get("detectors", []))
-        options.ignore.findings = list(ignore.get("findings", []))
+    if not isinstance(ignore, dict):
+        raise ConfigError("ignore must be a mapping")
+    _reject_unknown(ignore, _IGNORE_KEYS, "ignore.")
+    options.ignore.paths = _string_list(ignore, "paths", "ignore.")
+    options.ignore.detectors = _string_list(ignore, "detectors", "ignore.")
+    options.ignore.findings = _string_list(ignore, "findings", "ignore.")
     return options

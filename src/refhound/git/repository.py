@@ -80,13 +80,17 @@ def prepare_remote(
     else:
         if offline:
             raise RepositoryError("remote mirror is not cached; offline acquisition is impossible")
-        logger.info("cloning %s (mirror) to %s", target, dest)
+        logger.info("cloning %s (mirror) to %s", sanitize_remote_url(target), dest)
         git.run("clone", "--mirror", target, str(dest), timeout=900.0)
     return dest
 
 
 def open_repository(
-    path: str | Path, *, git: GitRunner | None = None, unshallow: bool = False
+    path: str | Path,
+    *,
+    git: GitRunner | None = None,
+    unshallow: bool = False,
+    offline: bool = False,
 ) -> RepositoryInfo:
     """Validate that ``path`` is a usable git repository.
 
@@ -161,6 +165,10 @@ def open_repository(
         )
 
     if info.shallow and unshallow:
+        if offline:
+            raise RepositoryError(
+                "--unshallow requires network access and conflicts with --offline"
+            )
         logger.info("unshallowing repository")
         git.run("fetch", "--unshallow", cwd=target, timeout=900.0)
         info.shallow = False

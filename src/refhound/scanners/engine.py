@@ -45,6 +45,7 @@ from refhound.util.paths import (
     classify_path_category,
     is_interesting_path,
 )
+from refhound.util.sanitize import sanitize_remote_url
 from refhound.util.sorting import finding_sort_key
 
 logger = logging.getLogger("refhound.engine")
@@ -135,7 +136,7 @@ class Engine:
 
     def run(self, target: str) -> ScanResult:
         started = utc_now()
-        logger.info("acquiring %s", target)
+        logger.info("acquiring %s", sanitize_remote_url(target))
         info = self._acquire(target)
 
         cwd = info.git_dir or info.path
@@ -189,7 +190,12 @@ class Engine:
         return self._open(target)
 
     def _open(self, path: str) -> RepositoryInfo:
-        info = open_repository(path, git=self.git, unshallow=self.options.unshallow)
+        info = open_repository(
+            path,
+            git=self.git,
+            unshallow=self.options.unshallow,
+            offline=self.options.offline,
+        )
         if info.shallow:
             logger.warning("repository is shallow; historical analysis is incomplete")
         if info.partial:

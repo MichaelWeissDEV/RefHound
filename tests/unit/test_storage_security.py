@@ -51,6 +51,46 @@ def test_secure_output_is_atomic_and_user_only(tmp_path: Path) -> None:
         secure_write_text(tmp_path / "missing" / "report.json", "x")
 
 
+def test_database_migration_scrubs_remote_credentials(tmp_path: Path) -> None:
+    sentinel = "SENTINEL_REMOTE_TOKEN"
+    raw_url = f"https://user:{sentinel}@example.org/repo.git"
+    db_path = tmp_path / "refhound.db"
+    Database(db_path).close()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("UPDATE schema_metadata SET value='2' WHERE key='schema_version'")
+        cursor = connection.execute(
+            "INSERT INTO repositories(path, created_at) VALUES (?, '2026-01-01 00:00:00')",
+            (raw_url,),
+        )
+        repository_id = cursor.lastrowid
+        connection.execute(
+            "INSERT INTO scans("
+            "repository_id, scan_id, commit_count, profile, started_at, snapshot_json"
+            ") VALUES (?, 'scan-legacy', 0, 'standard', '2026-01-01 00:00:00', ?)",
+            (
+                repository_id,
+                json.dumps({"schema_version": 3, "repository": raw_url}),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    Database(db_path).close()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        paths = [row[0] for row in connection.execute("SELECT path FROM repositories")]
+        snapshots = [row[0] for row in connection.execute("SELECT snapshot_json FROM scans")]
+    finally:
+        connection.close()
+
+    assert paths == [raw_url.replace(f"user:{sentinel}@", "")]
+    assert all(sentinel not in snapshot for snapshot in snapshots)
+
+
 def test_database_permissions_and_schema_version(tmp_path: Path) -> None:
     db_path = tmp_path / "private" / "refhound.db"
     db = Database(db_path)

@@ -37,6 +37,7 @@ from refhound.errors import (
 )
 from refhound.models.anomaly import ChurnFinding, InterestingCommit, TimelineRow
 from refhound.models.commit import CommitInfo, IdentitySet
+from refhound.models.diagnostic import ScanDiagnostic
 from refhound.models.finding import Finding, FindingCategory, SecretRecord, Severity, SourceState
 from refhound.models.object import DanglingObject, LostCommitChain
 from refhound.models.repository import RepoRef, RepositoryInfo
@@ -50,6 +51,7 @@ from refhound.scanners.engine import Engine, ScanResult
 from refhound.storage.database import Database, default_db_path
 from refhound.util.hashing import redacted_label
 from refhound.util.output import secure_write_text
+from refhound.util.sanitize import sanitize_remote_url
 
 app = typer.Typer(help="RefHound - Git repository security and forensic analysis tool.")
 analyze_app = typer.Typer(help="Focused analyses.")
@@ -132,29 +134,37 @@ def _resolve_options(
     offline: bool = False,
     debug: bool = False,
 ) -> ScanOptions:
-    profile = profile or "standard"
-    if profile in PROFILES:
-        scan_profile = PROFILES[profile]
-    else:
-        raise UsageError(f"unknown profile '{profile}'; choose from {', '.join(sorted(PROFILES))}")
-    options = ScanOptions(
-        profile=scan_profile,
-        max_blob_size=max_blob_size or 5 * 1024 * 1024,
-        fail_on=fail_on,
-        baseline_path=baseline,
-        unshallow=unshallow,
-        include_vendor=include_vendor,
-        refresh_remote=refresh_remote,
-        offline=offline,
-        debug=debug,
-    )
+    """Build scan options with the documented CLI > config > defaults order."""
     try:
         config = load_config_file(path)
-        options = options_from_config(config, options)
-    except ConfigError:
-        raise
     except OSError:
-        pass
+        config = {}
+    # Configuration is applied to the defaults first; explicit CLI values are
+    # overlaid afterwards so that they always win.
+    options = options_from_config(config, ScanOptions())
+
+    if profile is not None:
+        if profile not in PROFILES:
+            raise UsageError(
+                f"unknown profile '{profile}'; choose from {', '.join(sorted(PROFILES))}"
+            )
+        options.profile = PROFILES[profile]
+    if max_blob_size is not None:
+        if max_blob_size <= 0:
+            raise UsageError("--max-blob-size must be a positive integer")
+        options.max_blob_size = max_blob_size
+    options.fail_on = fail_on
+    options.baseline_path = baseline
+    options.unshallow = unshallow
+    options.include_vendor = include_vendor
+    options.refresh_remote = refresh_remote
+    options.offline = offline
+    options.debug = debug
+
+    if options.offline and options.unshallow:
+        raise UsageError("--offline cannot be combined with --unshallow")
+    if options.offline and options.refresh_remote:
+        raise UsageError("--offline cannot be combined with --refresh-remote")
     return options
 
 
@@ -250,7 +260,7 @@ def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
     """Build the redacted, report-ready representation stored in SQLite."""
     data = result.data
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "scan_id": data.scan_id,
         "scan_timestamp": data.scan_timestamp,
         "profile": result.options.profile.name,
@@ -269,6 +279,9 @@ def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
         "statistics": statistics,
         "deleted_files": list(data.deleted_files),
         "scan_warnings": list(data.scan_warnings),
+        "complete": data.complete,
+        "diagnostics": [d.model_dump(mode="json") for d in data.diagnostics],
+        "failed_detectors": dict(sorted(data.failed_detectors.items())),
         "duration_seconds": result.duration_seconds,
         "commit_graph": {
             sha: commit.model_dump(mode="json", exclude={"body", "message"})
@@ -291,7 +304,7 @@ def _snapshot(result: ScanResult, statistics: dict[str, Any]) -> dict[str, Any]:
 
 def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> ScanResult:
     """Validate and reconstruct report-ready analysis data from a DB snapshot."""
-    if snapshot.get("schema_version") != 2:
+    if snapshot.get("schema_version") != 3:
         raise ValueError("unsupported snapshot schema")
     data = AnalysisData(
         repo=(RepositoryInfo.model_validate(snapshot["repo"]) if snapshot.get("repo") else None),
@@ -324,6 +337,14 @@ def _result_from_snapshot(snapshot: dict[str, Any], options: ScanOptions) -> Sca
         notes={str(index): b"" for index in range(int(snapshot.get("notes_count", 0)))},
         findings=[Finding.model_validate(value) for value in snapshot.get("findings", [])],
         scan_warnings=list(snapshot.get("scan_warnings", [])),
+        complete=snapshot.get("complete", False) is True,
+        diagnostics=[
+            ScanDiagnostic.model_validate(value) for value in snapshot.get("diagnostics", [])
+        ],
+        failed_detectors={
+            str(key): int(value)
+            for key, value in dict(snapshot.get("failed_detectors", {})).items()
+        },
         scan_id=str(snapshot["scan_id"]),
         scan_timestamp=str(snapshot["scan_timestamp"]),
         cached_statistics=RepositoryStatistics.model_validate(snapshot["statistics"]),
@@ -367,7 +388,9 @@ def _is_remote(target: str) -> bool:
 
 def _repository_key(target: str) -> str:
     if _is_remote(target):
-        return target
+        # Never persist credentials embedded in a remote URL: the key is
+        # written to SQLite as ``repositories.path``.
+        return sanitize_remote_url(target)
     from refhound.git.command import GitRunner
 
     path = Path(target).expanduser().resolve()
@@ -423,6 +446,7 @@ def _load_or_run(path: str, options: ScanOptions, *, fresh: bool = False) -> Sca
             snapshot = db.latest_snapshot(repository)
             if (
                 snapshot is not None
+                and snapshot.get("complete") is True
                 and _profile_covers(snapshot.get("profile"), options.profile.name)
                 and snapshot.get("cache_hash") == options.cache_hash()
             ):
@@ -460,6 +484,19 @@ def _load_or_scan(path: str, *, fresh: bool = False, profile: str = "deep") -> S
         debug=False,
     )
     return _load_or_run(path, options, fresh=fresh)
+
+
+_SCAN_FORMATS = {"table", "json", "sarif", "markdown"}
+_REPORT_FORMATS = {"markdown", "json", "sarif"}
+
+
+def _validate_format(value: str, allowed: set[str], *, command: str) -> str:
+    normalized = value.lower()
+    if normalized not in allowed:
+        raise UsageError(
+            f"unknown {command} format '{value}'; choose from {', '.join(sorted(allowed))}"
+        )
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +542,7 @@ def scan(
 ) -> None:
     """Scan a repository (local or remote) for security findings."""
     _setup_logging(3 if debug else verbose)
+    format_option = _validate_format(format_option, _SCAN_FORMATS, command="scan")
     if quick:
         effective_profile = "quick"
     elif profile:
@@ -1335,6 +1373,7 @@ def report(
 ) -> None:
     """Generate a report (Markdown, JSON or SARIF)."""
     _setup_logging(verbose)
+    format_option = _validate_format(format_option, _REPORT_FORMATS, command="report")
     profile = "deep" if deep else "standard"
     try:
         result = _load_or_scan(path, fresh=fresh, profile=profile)

@@ -13,12 +13,14 @@ from typing import Any
 
 from platformdirs import user_data_dir
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
 from refhound.storage import schema
+from refhound.util.sanitize import sanitize_remote_url, sanitize_text
 
 _DATA_DIRNAME = "refhound"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def default_db_path() -> Path:
@@ -56,6 +58,14 @@ class Database:
         with self.engine.begin() as connection:
             if "snapshot_json" not in columns:
                 connection.execute(text("ALTER TABLE scans ADD COLUMN snapshot_json TEXT"))
+            row = connection.execute(
+                text("SELECT value FROM schema_metadata WHERE key='schema_version'")
+            ).fetchone()
+            previous = int(row[0]) if row and str(row[0]).isdigit() else 0
+            if previous < 3:
+                # Older versions could persist credential-bearing remote URLs
+                # as repository keys or inside snapshots.
+                self._scrub_credentials(connection)
             connection.execute(
                 text(
                     "INSERT INTO schema_metadata(key, value) VALUES ('schema_version', :version) "
@@ -63,6 +73,47 @@ class Database:
                 ),
                 {"version": str(SCHEMA_VERSION)},
             )
+
+    @staticmethod
+    def _scrub_credentials(connection: Connection) -> None:
+        """Rewrite stored repository keys and snapshots without credentials."""
+        rows = connection.execute(text("SELECT id, path FROM repositories")).fetchall()
+        by_path = {path: row_id for row_id, path in rows}
+        for row_id, path in rows:
+            safe = sanitize_remote_url(path)
+            if safe == path:
+                continue
+            existing = by_path.get(safe)
+            if existing is not None and existing != row_id:
+                # Keep the already-sanitized row and re-point its scans.
+                connection.execute(
+                    text("UPDATE scans SET repository_id=:keep WHERE repository_id=:drop"),
+                    {"keep": existing, "drop": row_id},
+                )
+                connection.execute(
+                    text("DELETE FROM repositories WHERE id=:drop"), {"drop": row_id}
+                )
+            else:
+                connection.execute(
+                    text("UPDATE repositories SET path=:safe WHERE id=:id"),
+                    {"safe": safe, "id": row_id},
+                )
+                by_path[safe] = row_id
+            if by_path.get(path) == row_id:
+                by_path.pop(path, None)
+
+        scans = connection.execute(
+            text("SELECT id, snapshot_json FROM scans WHERE snapshot_json IS NOT NULL")
+        ).fetchall()
+        for scan_id, snapshot in scans:
+            if not isinstance(snapshot, str):
+                continue
+            cleaned = sanitize_text(snapshot)
+            if cleaned != snapshot:
+                connection.execute(
+                    text("UPDATE scans SET snapshot_json=:value WHERE id=:id"),
+                    {"value": cleaned, "id": scan_id},
+                )
 
     def store_scan(
         self,
@@ -79,6 +130,7 @@ class Database:
         profile: str = "standard",
     ) -> None:
         """Persist a scan snapshot and its ref state."""
+        repository = sanitize_remote_url(repository)
         with self.session() as session:
             repository_row = (
                 session.query(schema.RepositoryRecord)

@@ -72,3 +72,12 @@ def test_remote_credentials_are_removed_from_all_supported_url_forms() -> None:
     assert sentinel not in " ".join(sanitize_command_args(("clone", *urls)))
     stderr = f"fatal: unable to access 'https://user:{sentinel}@example.org/repo.git': denied"
     assert sentinel not in sanitize_text(stderr)
+
+
+def test_database_repository_key_never_contains_credentials() -> None:
+    from refhound.cli import _repository_key
+
+    sentinel = "SENTINEL_TOKEN"
+    key = _repository_key(f"https://user:{sentinel}@example.org/repo.git")
+    assert sentinel not in key
+    assert key == "https://example.org/repo.git"

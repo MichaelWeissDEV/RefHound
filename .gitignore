@@ -12,6 +12,10 @@ venv/
 
 # Build output
 docs/_build/
+dist/
+build/
+.coverage
+coverage.xml
 
 # OS
 .DS_Store

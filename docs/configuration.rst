@@ -4,8 +4,8 @@ Configuration
 Precedence is CLI, repository ``.refhound.yml``, then built-in defaults. YAML
 is loaded with ``safe_load``. Supported configuration keys are
 ``scan.max_blob_size`` and ``ignore.paths``, ``ignore.detectors``, and
-``ignore.findings``. Unknown keys are currently ignored for forward
-compatibility.
+``ignore.findings``. Unknown keys are rejected with a configuration error so
+that typos and removed options fail loudly instead of being silently ignored.
 
 Baselines
 ---------
