@@ -1,0 +1,51 @@
+# Maintainer: Michael Weiss <michael@example.invalid>
+pkgname=refhound
+pkgver=0.1.0a1
+pkgrel=1
+pkgdesc="Git repository security and forensic analysis tool"
+arch=('any')
+url="https://github.com/MichaelWeissDEV/RefHound"
+license=('MIT')
+depends=(
+  'git'
+  'python'
+  'python-httpx'
+  'python-platformdirs'
+  'python-pydantic'
+  'python-rich'
+  'python-sqlalchemy'
+  'python-typer'
+  'python-yaml'
+)
+makedepends=(
+  'python-build'
+  'python-hatchling'
+  'python-installer'
+  'python-wheel'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+# Local builds (CI) can point at an already-created tarball instead of
+# downloading the release from GitHub.
+if [[ -n ${REFHOUND_LOCAL_TARBALL:-} ]]; then
+  source=("$REFHOUND_LOCAL_TARBALL")
+fi
+
+prepare() {
+  cd "$srcdir"
+  rm -rf "RefHound-$pkgver"
+  tar -xf "$pkgname-$pkgver.tar.gz"
+}
+
+build() {
+  cd "RefHound-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "RefHound-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

@@ -1,0 +1,5 @@
+refhound (0.1.0~a1-1) unstable; urgency=medium
+
+  * Alpha release with PyPI, Debian and RPM packaging.
+
+ -- Michael Weiss <michael@example.invalid>  Wed, 04 Nov 2026 12:00:00 +0100

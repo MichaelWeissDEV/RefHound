@@ -1,0 +1,37 @@
+Source: refhound
+Section: utils
+Priority: optional
+Maintainer: Michael Weiss <michael@example.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-hatchling
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/MichaelWeissDEV/RefHound
+Vcs-Git: https://github.com/MichaelWeissDEV/RefHound.git
+Vcs-Browser: https://github.com/MichaelWeissDEV/RefHound
+
+Package: refhound
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ git,
+ python3-httpx,
+ python3-platformdirs,
+ python3-pydantic,
+ python3-rich,
+ python3-sqlalchemy,
+ python3-typer,
+ python3-yaml
+Description: Git repository security and forensic analysis tool
+ RefHound inspects the Git object database and refs to surface information
+ that is no longer visible in the current working tree: deleted branches,
+ unreachable commits, dangling objects and secrets that were introduced
+ and later removed.
+ .
+ It is read-only, never validates or brute-forces credentials and never
+ attempts to bypass access controls.

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+refhound --version
+refhound --help >/dev/null
+refhound scan --help >/dev/null
+refhound doctor --help >/dev/null

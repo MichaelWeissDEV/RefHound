@@ -6,12 +6,27 @@ is fully portable across platforms and CI environments.
 
 from __future__ import annotations
 
+import ast
 import os
+from pathlib import Path
+
+
+def _read_version() -> str:
+    """Read the single version source without importing the package."""
+    source = Path(__file__).resolve().parent.parent / "src" / "refhound" / "_version.py"
+    module = ast.parse(source.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(target, "id", "") == "__version__" for target in node.targets
+        ):
+            return str(ast.literal_eval(node.value))
+    raise RuntimeError(f"could not read __version__ from {source}")
+
 
 project = "RefHound"
 author = "Michael Weiss"
 copyright = "2026, Michael Weiss"
-version = os.environ.get("REFHOUND_DOC_VERSION", "0.1.0")
+version = os.environ.get("REFHOUND_DOC_VERSION", _read_version())
 release = version
 
 extensions: list[str] = []

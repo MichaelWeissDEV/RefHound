@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_pypi:
+        description: "Also publish the built distribution to PyPI"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wheel and sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - run: uv run --isolated --with twine twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/*
+
+  verify-install:
+    name: Install wheel in isolation (Python ${{ matrix.python }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound --version
+      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound --help
+      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound scan --help
+      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl python -c "import refhound; print(refhound.__version__)"
+
+  packages:
+    name: Native packages
+    uses: ./.github/workflows/packages.yml
+
+  pypi:
+    name: Publish to PyPI
+    needs: [build, verify-install]
+    if: |
+      startsWith(github.ref, 'refs/tags/v') &&
+      (vars.PUBLISH_TO_PYPI == 'true' || inputs.publish_pypi)
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  github-release:
+    name: GitHub release
+    needs: [build, verify-install, packages]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Create release with all artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "RefHound $GITHUB_REF_NAME" \
+            --generate-notes \
+            $(find release-assets -type f)
