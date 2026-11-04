@@ -30,10 +30,19 @@ jobs:
             python-sqlalchemy python-platformdirs python-httpx python-yaml pacman-contrib
 
           version=$(python3 -c "import ast,pathlib; m=ast.parse(pathlib.Path('src/refhound/_version.py').read_text()); print(next(ast.literal_eval(n.value) for n in m.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', '') == '__version__' for t in n.targets)))")
+
+          # checkout falls back to a source tarball when the image has no git,
+          # so build the release tarball from the working tree instead of git.
+          stage=$(mktemp -d)
+          mkdir -p "$stage/RefHound-$version"
+          cp -a "$GITHUB_WORKSPACE/." "$stage/RefHound-$version/"
+          rm -rf "$stage/RefHound-$version/.git" "$stage/RefHound-$version/artifacts" \
+            "$stage/RefHound-$version/.venv" "$stage/RefHound-$version/dist" \
+            "$stage/RefHound-$version/build" "$stage/RefHound-$version/docs/_build"
+          find "$stage/RefHound-$version" -name __pycache__ -type d -prune -exec rm -rf {} +
           mkdir -p artifacts/source
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git archive --format=tar.gz --prefix="RefHound-$version/" \
-            -o "artifacts/source/refhound-$version.tar.gz" HEAD
+          tar -czf "artifacts/source/refhound-$version.tar.gz" -C "$stage" "RefHound-$version"
+          rm -rf "$stage"
 
           useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
@@ -121,10 +130,19 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python3 -c "import ast,pathlib; m=ast.parse(pathlib.Path('src/refhound/_version.py').read_text()); print(next(ast.literal_eval(n.value) for n in m.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', '') == '__version__' for t in n.targets)))")
+
+          # checkout falls back to a source tarball when the image has no git,
+          # so build the release tarball from the working tree instead of git.
+          stage=$(mktemp -d)
+          mkdir -p "$stage/RefHound-$version"
+          cp -a "$GITHUB_WORKSPACE/." "$stage/RefHound-$version/"
+          rm -rf "$stage/RefHound-$version/.git" "$stage/RefHound-$version/artifacts" \
+            "$stage/RefHound-$version/.venv" "$stage/RefHound-$version/dist" \
+            "$stage/RefHound-$version/build" "$stage/RefHound-$version/docs/_build"
+          find "$stage/RefHound-$version" -name __pycache__ -type d -prune -exec rm -rf {} +
           mkdir -p "$HOME/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git archive --format=tar.gz --prefix="RefHound-$version/" \
-            -o "$HOME/rpmbuild/SOURCES/refhound-$version.tar.gz" HEAD
+          tar -czf "$HOME/rpmbuild/SOURCES/refhound-$version.tar.gz" -C "$stage" "RefHound-$version"
+          rm -rf "$stage"
           rpmbuild --define "_topdir $HOME/rpmbuild" -ba --nodeps packaging/rpm/refhound.spec
 
           mkdir -p artifacts/${{ matrix.artifact }}
