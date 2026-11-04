@@ -35,7 +35,25 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras
-      - run: uv run pytest
+      - name: Run tests
+        shell: bash
+        run: |
+          set +e
+          uv run pytest -q --tb=line -rf > pytest.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 150 pytest.log
+            # Job logs need repository admin rights; annotations are readable.
+            # Emit the failure output as one annotation so CI failures can be
+            # diagnosed without log access.
+            body=$(tail -n 120 pytest.log)
+            body=${body//'%'/%25}
+            body=${body//$'\r'/}
+            body=${body//$'\n'/%0A}
+            body=${body:0:60000}
+            echo "::error title=pytest failures::$body"
+          fi
+          exit "$status"
 
   security-contract:
     runs-on: ubuntu-latest

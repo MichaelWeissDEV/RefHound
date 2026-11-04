@@ -92,6 +92,8 @@ jobs:
         with:
           packages-dir: dist
           print-hash: true
+          # A re-run for an already published version must not fail.
+          skip-existing: true
 
   github-release:
     name: GitHub release

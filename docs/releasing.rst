@@ -66,6 +66,11 @@ Manual publish
 4. Tick ``publish_pypi``.
 5. Click *Run workflow*.
 
+Select the **tag**, not a branch: PyPI is published in both cases, but the
+GitHub release with the native packages and ``SHA256SUMS`` is only created
+for tag refs. Re-running a workflow for an already published version is
+safe; the upload step skips files that already exist on PyPI.
+
 The job sequence is ``build`` -> ``verify-install`` (Python 3.12 and 3.13) ->
 ``pypi``. Native packages run in parallel; the GitHub release is created only
 for tag pushes and includes every ``.deb``, ``.rpm``, ``.pkg.tar.zst``, the
