@@ -8,7 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "Michael Weiss" }]
 keywords = ["git", "security", "forensics", "secret-scanning", "audit"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -59,6 +59,10 @@ path = "src/refhound/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/refhound"]
+
+[tool.hatch.build.targets.sdist]
+# Exclude the Arch recipe so its verified sdist checksum is not self-referential.
+exclude = ["/packaging/arch/PKGBUILD", "/RELEASE_READINESS.md"]
 
 [tool.ruff]
 line-length = 100

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ def main() -> None:
         repo.mkdir()
         run("uv", "venv", "--python", sys.executable, str(env_dir), cwd=root)
         python = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        cli = env_dir / ("Scripts/refhound.exe" if os.name == "nt" else "bin/refhound")
         run("uv", "pip", "install", "--python", str(python), str(matches[0]), cwd=root)
         # Isolated mode prevents PYTHONPATH and the current checkout influencing imports.
         run(
@@ -50,6 +52,9 @@ def main() -> None:
             cwd=repo,
         )
         run(str(python), "-I", "-m", "refhound", "--version", cwd=root)
+        run(str(cli), "--version", cwd=root)
+        run(str(cli), "--help", cwd=root)
+        run(str(cli), "doctor", str(repo), cwd=root)
         run(
             str(python),
             "-I",
@@ -68,6 +73,9 @@ def main() -> None:
         )
         if not (root / "scan.json").is_file():
             raise RuntimeError("scan did not produce JSON")
+        report = json.loads((root / "scan.json").read_text(encoding="utf-8"))
+        if report.get("scan_profile") != "quick" or not isinstance(report.get("repository"), dict):
+            raise RuntimeError("scan produced an unexpected JSON report")
 
 
 if __name__ == "__main__":

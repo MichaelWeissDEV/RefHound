@@ -24,8 +24,9 @@ IDs or validate/reuse found credentials.
 
 Full documentation is available at <https://refhound.readthedocs.io/>.
 
-**Release status:** the current source version is `0.1.0b1`; stable `0.1.0`
-and native installation paths are not yet release-validated. See
+**Release status:** this checkout prepares the `0.1.0` release candidate;
+the published `0.1.0b1` beta remains available. Stable `0.1.0` and native
+installation paths are not yet release-validated. See
 [`RELEASE_READINESS.md`](RELEASE_READINESS.md). Do not rely on `--offline` as
 a network isolation boundary for partial clones until independently verified;
 use OS-level network isolation when required.
@@ -38,6 +39,7 @@ dependencies are installed automatically. For an isolated CLI installation:
 
 ```sh
 uv tool install 'refhound==0.1.0b1'
+# or: pipx install 'refhound==0.1.0b1'
 # alternatively, in a Python 3.12+ virtual environment:
 python -m pip install 'refhound==0.1.0b1'
 ```
@@ -45,12 +47,17 @@ python -m pip install 'refhound==0.1.0b1'
 Pinning the beta explicitly avoids enabling pre-releases for all dependencies.
 Once a stable version has actually been published, `uv tool install refhound`
 or `python -m pip install refhound` can select it normally. To remove the
-tool, use `uv tool uninstall refhound` or `python -m pip uninstall refhound`.
-Use `uv tool upgrade refhound` or `python -m pip install --upgrade refhound` to
+tool, use `uv tool uninstall refhound`, `pipx uninstall refhound` or
+`python -m pip uninstall refhound`. Use `uv tool upgrade refhound`,
+`pipx upgrade refhound` or `python -m pip install --upgrade refhound` to
 update; explicitly pinned beta versions may need to be replaced first.
 
-The Homebrew tap is being prepared separately and is not yet published or
-installation-tested; see [`packaging/README.md`](packaging/README.md).
+The Homebrew tap is published, but its beta formula has failed CI on both
+architectures and is **not** a verified installation route. Once the tap CI
+passes, use `brew tap MichaelWeissDEV/tap` and
+`brew install MichaelWeissDEV/tap/refhound`; it still installs the beta until
+the stable PyPI source archive is available. See
+[`packaging/README.md`](packaging/README.md).
 
 During development:
 

@@ -4,6 +4,14 @@ All notable changes to RefHound are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - Release candidate (not published)
+
+- Prepare stable-version metadata and native package recipes for release review.
+- Expand distribution installation and Homebrew formula validation. The
+  published `v0.1.0b1` beta remains unchanged.
+- The stable release is blocked on the full CI dry run, Intel/ARM64 Homebrew
+  installation, and verification of the stable Arch source checksum.
+
 ## [0.1.0b1] - 2026-11-04
 
 The first beta. The Python API is still an alpha surface until 1.0, but the

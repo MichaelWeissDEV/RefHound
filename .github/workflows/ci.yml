@@ -79,6 +79,7 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run sphinx-build -W docs docs/_build
       - run: uv build
+      - run: python scripts/release.py verify-sdist dist
       - run: uv run --isolated --with dist/*.whl refhound --version
       - run: uv run --isolated --with dist/*.whl refhound --help
       - run: uv run --isolated --with dist/*.whl refhound scan --help

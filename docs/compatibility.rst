@@ -6,8 +6,8 @@ Versioning
 
 RefHound uses PEP 440 pre-release versions:
 
-* ``0.1.0b1`` - current source version
-* ``0.1.0`` - planned first stable release, not yet approved
+* ``0.1.0b1`` - published beta (unchanged)
+* ``0.1.0`` - current release-candidate source, not yet published or approved
 
 Pre-releases are not selected by default by ``pip`` or ``uv``. Request the
 published beta explicitly with ``pip install 'refhound==0.1.0b1'`` or
@@ -16,7 +16,7 @@ also select pre-release versions of unrelated dependencies.
 
 The version has a single source of truth: ``src/refhound/_version.py``. The
 build backend and the documentation read it from there; a release tag must
-match it exactly (``v0.1.0b1``). Publication also requires a stable tag,
+match it exactly (``v0.1.0`` for this candidate). Publication also requires a stable tag,
 successful gates and protected environment approvals.
 
 Public interfaces

@@ -31,10 +31,15 @@ def test_publication_requires_matching_stable_tag() -> None:
             != 0
         )
     else:
-        assert (
-            invoke("check", PUBLISH="true", REF_TYPE="tag", REF_NAME=f"v{__version__}").returncode
-            == 0
-        )
+        result = invoke("check", PUBLISH="true", REF_TYPE="tag", REF_NAME=f"v{__version__}")
+        assert result.returncode == 0, result.stderr
+
+
+def test_sdist_checksum_rejects_mismatched_archive(tmp_path: Path) -> None:
+    (tmp_path / f"refhound-{__version__}.tar.gz").write_bytes(b"not the release archive")
+    result = invoke("verify-sdist", str(tmp_path))
+    assert result.returncode != 0
+    assert "Arch checksum differs" in result.stderr
 
 
 def test_manifest_checks_names_and_digests(tmp_path: Path) -> None:

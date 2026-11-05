@@ -41,6 +41,8 @@ def check() -> None:
     distro = re.sub(r"(a|b|rc)(\d+)$", r"~\1\2", value)
     if not re.search(rf"(?m)^pkgver={re.escape(value)}$", arch):
         raise ValueError("Arch version does not match")
+    if publish and not re.search(r"(?m)^sha256sums=\('[0-9a-f]{64}'\)$", arch):
+        raise ValueError("publication requires a verified Arch source checksum")
     if not re.search(rf"(?m)^%global tag_version {re.escape(value)}$", rpm):
         raise ValueError("RPM source version does not match")
     if not re.search(rf"(?m)^Version:\s+{re.escape(distro)}$", rpm):
@@ -48,6 +50,18 @@ def check() -> None:
     if not deb.startswith(f"refhound ({distro}-"):
         raise ValueError("Debian version does not match")
     print(f"Version and recipe checks passed: {value}")
+
+
+def verify_sdist(directory: Path) -> None:
+    """Ensure the Arch recipe will fetch the exact sdist built by this workflow."""
+    archives = list(directory.glob(f"refhound-{version()}.tar.gz"))
+    if len(archives) != 1:
+        raise ValueError("expected exactly one versioned source distribution")
+    recipe = (ROOT / "packaging/arch/PKGBUILD").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^sha256sums=\('([0-9a-f]{64})'\)$", recipe)
+    if not match or hashlib.sha256(archives[0].read_bytes()).hexdigest() != match[1]:
+        raise ValueError("Arch checksum differs from the candidate sdist")
+    print(f"Arch source checksum verified: {match[1]}")
 
 
 def manifest(source: Path, destination: Path) -> None:
@@ -94,7 +108,11 @@ def manifest(source: Path, destination: Path) -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["check"]:
         check()
+    elif len(sys.argv) == 3 and sys.argv[1] == "verify-sdist":
+        verify_sdist(Path(sys.argv[2]))
     elif len(sys.argv) == 4 and sys.argv[1] == "manifest":
         manifest(Path(sys.argv[2]), Path(sys.argv[3]))
     else:
-        raise SystemExit("usage: release.py check | manifest SOURCE DESTINATION")
+        raise SystemExit(
+            "usage: release.py check | verify-sdist DIST | manifest SOURCE DESTINATION"
+        )

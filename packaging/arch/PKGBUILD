@@ -1,6 +1,6 @@
 # Maintainer: Michael Weiss <michael@example.invalid>
 pkgname=refhound
-pkgver=0.1.0b1
+pkgver=0.1.0
 pkgrel=1
 pkgdesc="Git repository security and forensic analysis tool"
 arch=('any')
@@ -23,8 +23,10 @@ makedepends=(
   'python-installer'
   'python-wheel'
 )
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('1d59d5470c3cdcceb2673d3daa5fdfd91a7ac052fd9ec729fea8f8cedc5bf473')
+source=("$pkgname-$pkgver.tar.gz::https://files.pythonhosted.org/packages/source/r/$pkgname/$pkgname-$pkgver.tar.gz")
+# SHA-256 of the candidate sdist; verify again against the PyPI file after
+# publication. The PKGBUILD is excluded from the sdist to avoid a hash loop.
+sha256sums=('a3a86c307f38ce5f2999a024e7b7452d2217535e2ef7fe811825a2bc7bd3af4d')
 
 # Local builds (CI) can point at an already-created tarball instead of
 # downloading the release from GitHub.
@@ -37,17 +39,21 @@ fi
 
 prepare() {
   cd "$srcdir"
-  rm -rf "RefHound-$pkgver"
+  rm -rf "$pkgname-$pkgver" "RefHound-$pkgver"
   tar -xf "$pkgname-$pkgver.tar.gz"
+  # The local CI source archive uses a GitHub-style capitalized root.
+  if [[ -d "RefHound-$pkgver" ]]; then
+    mv "RefHound-$pkgver" "$pkgname-$pkgver"
+  fi
 }
 
 build() {
-  cd "RefHound-$pkgver"
+  cd "$pkgname-$pkgver"
   python -m build --wheel --no-isolation
 }
 
 package() {
-  cd "RefHound-$pkgver"
+  cd "$pkgname-$pkgver"
   python -m installer --destdir="$pkgdir" dist/*.whl
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

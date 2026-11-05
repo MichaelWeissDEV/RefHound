@@ -1,7 +1,7 @@
 # Native packaging
 
 Native packages and package repositories are planned and are not yet
-release-validated. The current source version is `0.1.0b1`; see
+release-validated. The current candidate source version is `0.1.0`; see
 `RELEASE_READINESS.md` for evidence and blockers.
 
 | Format | Source of truth | Build command |
@@ -15,17 +15,19 @@ release-validated. The current source version is `0.1.0b1`; see
 
 ```console
 # Debian 13 (after building or obtaining a verified package)
-$ sudo apt install ./refhound_0.1.0~b1-1_all.deb
+$ sudo apt install ./refhound_0.1.0-1_all.deb
 
 # Fedora / RHEL / openSUSE
-$ sudo dnf install ./refhound-0.1.0~b1-1.noarch.rpm
-$ sudo zypper install ./refhound-0.1.0~b1-1.noarch.rpm
+$ sudo dnf install ./refhound-0.1.0-1.noarch.rpm
+$ sudo zypper install ./refhound-0.1.0-1.noarch.rpm
 
 # Arch Linux
-$ sudo pacman -U ./refhound-0.1.0b1-1-any.pkg.tar.zst
+$ sudo pacman -U ./refhound-0.1.0-1-any.pkg.tar.zst
 ```
 
-A `.deb` or `.rpm` file on the GitHub release page is installable this way,
+These stable filenames are examples until the release dry run verifies the
+actual artifacts; RPM suffixes may differ by distribution. A `.deb` or `.rpm`
+file on the GitHub release page is installable this way,
 but it does **not** create an APT, DNF or Zypper repository. Automatic
 updates require a signed, indexed repository (for example OBS/COPR or a
 distribution archive).
@@ -38,8 +40,9 @@ $ updpkgsums       # refresh and review after changing the version
 $ makepkg -si
 ```
 
-The checked-in checksum matches the upstream `v0.1.0b1` GitHub tag archive.
-Refresh and independently verify it whenever the version changes. The
+The stable PyPI sdist does not exist yet. The checksum must match the final
+candidate sdist before publishing the PKGBUILD or dispatching `publish=true`.
+The sdist excludes this recipe to avoid a self-referential checksum. The
 `REFHOUND_LOCAL_TARBALL` override computes a hash for a locally generated
 CI archive and must not be used as a substitute for verifying release source.
 
@@ -47,12 +50,11 @@ CI archive and must not be used as a substitute for verifying release source.
 
 ```console
 $ dpkg-buildpackage -us -uc -b
-$ sudo apt install ../refhound_0.1.0~b1-1_all.deb
-$ lintian ../refhound_0.1.0~b1-1_all.deb
+$ sudo apt install ../refhound_0.1.0-1_all.deb
+$ lintian ../refhound_0.1.0-1_all.deb
 ```
 
-Debian versioning uses `~` for pre-releases, so upstream `0.1.0b1` becomes
-`0.1.0~b1`.
+Debian versioning uses `~` for pre-releases; stable `0.1.0` uses `0.1.0-1`.
 
 Debian 13 ARM64 was locally built and smoke-tested with install, reinstall
 and removal. Ubuntu 24.04 ships older Typer, Pydantic and HTTPX than required;
@@ -62,18 +64,20 @@ the same version is not proof of an upgrade from an earlier version.
 
 ## Homebrew
 
-The sibling `homebrew-tap` repository contains the draft formula and its CI.
-It points to the published beta and is not yet published or validated by an
-actual Homebrew installation. The tap README describes source, resources,
-testing and the manual update and publication process.
+The published sibling `homebrew-tap` contains a beta formula and CI. Its last
+ARM64 and Intel runs failed, so this is not yet a validated installation
+method. After those checks pass, `brew tap MichaelWeissDEV/tap` and
+`brew install MichaelWeissDEV/tap/refhound` install the beta. Use
+`brew update && brew upgrade refhound` or `brew uninstall refhound`. The tap
+README describes source, resources, testing and the manual update process.
 
 ## Fedora / RHEL / openSUSE
 
 `rpmbuild` needs the source archive in `%{_sourcedir}`:
 
 ```console
-$ git archive --format=tar.gz --prefix=RefHound-0.1.0b1/ \
-    -o ~/rpmbuild/SOURCES/refhound-0.1.0b1.tar.gz HEAD
+$ git archive --format=tar.gz --prefix=RefHound-0.1.0/ \
+    -o ~/rpmbuild/SOURCES/refhound-0.1.0.tar.gz HEAD
 $ rpmbuild -ba packaging/rpm/refhound.spec
 ```
 

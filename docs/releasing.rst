@@ -5,7 +5,8 @@ The ``Release`` workflow is manually dispatched. Its default is a dry run:
 it has no publishing job permissions unless ``publish`` is selected. A
 publication requires a stable version tag matching ``src/refhound/_version.py``,
 successful CI, native builds and isolated wheel/sdist tests. The source version
-is currently ``0.1.0b1``; a stable publication is deliberately rejected.
+is now prepared as ``0.1.0``. Publication is deliberately rejected until
+the matching stable tag and verified Arch source checksum exist.
 
 This is a release candidate pipeline, not evidence that the unexecuted GitHub
 matrix or native packages pass. Do not publish until all blockers in
@@ -84,9 +85,16 @@ Never move an existing release tag or silently replace release assets.
 Homebrew and native repositories
 --------------------------------
 
-No Homebrew tap, AUR package, APT/DNF repository, OBS project or COPR project
-is configured by this workflow. A beta formula is prepared in the sibling
-``homebrew-tap`` repository but has not yet been installation-tested or
-published. A tested stable formula and repository integration remain open
-work. Set up any external repository, signing key or account only after
-separate approval.
+This workflow does not publish a Homebrew tap, AUR package, APT/DNF repository,
+OBS project or COPR project. The sibling ``homebrew-tap`` is published with a
+beta formula, but its ARM64 and Intel CI checks failed. The stable formula
+must be updated with the published PyPI sdist and verified resources *after*
+the stable release, then tested on both architectures. Set up any other
+external repository, signing key or account only after separate approval.
+
+If PyPI succeeds but GitHub Release fails, do not re-run the full publishing
+workflow: it will attempt an immutable PyPI upload again. Keep the tag and
+artifacts unchanged, investigate the failure, verify PyPI hashes against the
+dry-run assets, and use a separately reviewed GitHub-only recovery process
+under the protected release environment. If Python artifacts are wrong,
+yank the PyPI version and prepare a new version instead of overwriting it.

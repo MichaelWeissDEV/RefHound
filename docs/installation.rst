@@ -26,9 +26,13 @@ The pip and uv commands were tested on macOS ARM64; other platforms and pipx
 still need validation. Remove with ``uv tool uninstall refhound``,
 ``pipx uninstall refhound`` or ``python -m pip uninstall refhound``.
 
-The Homebrew tap ``MichaelWeissDEV/homebrew-tap`` is being prepared locally;
-it is not yet published or installation-tested. See its README for the
-maintainer process. Do not treat it as a stable installation source yet.
+The Homebrew tap ``MichaelWeissDEV/tap`` is published, but the beta formula
+has failed CI on macOS ARM64 and Intel and is not installation-validated.
+After both jobs pass, install with ``brew tap MichaelWeissDEV/tap`` and
+``brew install MichaelWeissDEV/tap/refhound``; this still selects the beta
+until the formula is updated after the stable PyPI release. Upgrade with
+``brew update && brew upgrade refhound`` and remove with
+``brew uninstall refhound``. See the tap README for maintainer details.
 
 Native Linux packages
 ---------------------
@@ -40,16 +44,18 @@ verified download links:
 .. code-block:: console
 
    # Debian / Ubuntu
-   $ sudo apt install ./refhound_0.1.0~b1-1_all.deb
+   $ sudo apt install ./refhound_0.1.0-1_all.deb
 
    # Fedora / RHEL 10+ / openSUSE
-   $ sudo dnf install ./refhound-0.1.0~b1-1.noarch.rpm
-   $ sudo zypper install ./refhound-0.1.0~b1-1.noarch.rpm
+   $ sudo dnf install ./refhound-0.1.0-1.noarch.rpm
+   $ sudo zypper install ./refhound-0.1.0-1.noarch.rpm
 
    # Arch Linux
-   $ sudo pacman -U ./refhound-0.1.0b1-1-any.pkg.tar.zst
+   $ sudo pacman -U ./refhound-0.1.0-1-any.pkg.tar.zst
 
-These files install the tool, but they do not configure an APT, DNF or Zypper
+These are prospective stable asset names; the stable packages do not exist
+yet. Actual RPM distribution suffixes may differ. These files install the
+tool, but they do not configure an APT, DNF or Zypper
 repository. Automatic updates require a signed, indexed repository or an
 entry in the distribution archive. See ``packaging/README.md`` for build
 instructions, checksums and repository caveats.

@@ -1,4 +1,4 @@
-%global tag_version 0.1.0b1
+%global tag_version 0.1.0
 
 %if 0%{?suse_version}
 # Build for the default interpreter only; the SUSE macros otherwise try every
@@ -7,7 +7,7 @@
 %endif
 
 Name:           refhound
-Version:        0.1.0~b1
+Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Git repository security and forensic analysis tool
 License:        MIT
@@ -58,6 +58,8 @@ attempts to bypass access controls.
 %{python3_sitelib}/%{name}-*.dist-info
 
 %changelog
+* Thu Nov 05 2026 Michael Weiss <michael@example.invalid> - 0.1.0-1
+- Prepare the first stable release candidate; publication requires approval.
 * Wed Nov 04 2026 Michael Weiss <michael@example.invalid> - 0.1.0~b1-1
 - First beta release with the public Python API and PyPI publishing.
 * Wed Nov 04 2026 Michael Weiss <michael@example.invalid> - 0.1.0~a1-1
