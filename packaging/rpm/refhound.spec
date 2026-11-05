@@ -15,6 +15,8 @@ URL:            https://github.com/MichaelWeissDEV/RefHound
 Source0:        %{name}-%{tag_version}.tar.gz
 BuildArch:      noarch
 BuildRequires:  python3-devel
+Requires:       git
+Requires:       python3 >= 3.12
 %if 0%{?suse_version}
 # openSUSE ships the PEP 517 macros in python-rpm-macros, but not the
 # Fedora-style dynamic build-requires helper.

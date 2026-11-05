@@ -6,17 +6,18 @@ Versioning
 
 RefHound uses PEP 440 pre-release versions:
 
-* ``0.1.0a1`` - first alpha, installable from PyPI and native packages
-* ``0.1.0b1`` - first beta with the public Python API and release pipeline
-* ``0.1.0`` - first stable release
+* ``0.1.0b1`` - current source version
+* ``0.1.0`` - planned first stable release, not yet approved
 
-Pre-releases are not selected by default by ``pip`` or ``uv``. Use
-``pip install --pre refhound`` or ``pipx install --pre refhound``.
+Pre-releases are not selected by default by ``pip`` or ``uv``. Request the
+published beta explicitly with ``pip install 'refhound==0.1.0b1'`` or
+``uv tool install 'refhound==0.1.0b1'``. Using a global pre-release option can
+also select pre-release versions of unrelated dependencies.
 
 The version has a single source of truth: ``src/refhound/_version.py``. The
 build backend and the documentation read it from there; a release tag must
-match it exactly (``v0.1.0b1``). The release workflow checks this before it
-publishes anything.
+match it exactly (``v0.1.0b1``). Publication also requires a stable tag,
+successful gates and protected environment approvals.
 
 Public interfaces
 -----------------
@@ -35,25 +36,26 @@ Platform support
 ----------------
 
 * Python 3.12 and 3.13.
-* Linux, macOS and Windows for the Python package.
-* Arch Linux, Debian 13 / Ubuntu 24.04 or newer, Fedora, openSUSE Tumbleweed
-  and RHEL 10+ for native packages. RHEL 9 and older streams ship Python 3.9
-  and are not supported by the current ``requires-python`` constraint.
+* Linux, macOS and Windows are targets for the Python package, pending the
+  full cross-platform release matrix.
+* Native packages for Arch Linux, Debian 13, Ubuntu 24.04+, Fedora, openSUSE
+  Tumbleweed and compatible RHEL versions are planned, not release-validated.
+  A Python interpreter meeting the package's ``>=3.12`` requirement is needed.
 * Git SHA-1 is required; SHA-256 is supported where the installed Git
   supports ``git init --object-format=sha256``.
 
 Release artifacts
 -----------------
 
-Each tagged release publishes:
+Planned release artifacts, subject to validation:
 
 * wheel (``py3-none-any``) and source distribution;
 * Debian ``.deb``, RPM for Fedora/openSUSE and an Arch ``.pkg.tar.zst``;
 * ``SHA256SUMS`` and a GitHub release with generated notes.
 
-The wheel is installed in isolation on Python 3.12 and 3.13 before publishing.
-PyPI uses trusted publishing through GitHub OIDC; no long-lived API token is
-stored in the repository.
+The workflow defaults to a dry run. Publication is opt-in and requires
+external trusted publishing and environment protection configuration; it has
+not yet been validated end to end.
 
 Native package artifacts are installable with ``apt``/``dnf``/``zypper``/
 ``pacman`` but do not create package repositories by themselves. Repository

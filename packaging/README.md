@@ -1,7 +1,8 @@
 # Native packaging
 
-RefHound ships one Python distribution (`refhound` on PyPI) and derives the
-native Linux packages from the same source tree and version.
+Native packages and package repositories are planned and are not yet
+release-validated. The current source version is `0.1.0b1`; see
+`RELEASE_READINESS.md` for evidence and blockers.
 
 | Format | Source of truth | Build command |
 | --- | --- | --- |
@@ -13,7 +14,7 @@ native Linux packages from the same source tree and version.
 ## Installing the built artifacts
 
 ```console
-# Debian / Ubuntu
+# Debian 13 (after building or obtaining a verified package)
 $ sudo apt install ./refhound_0.1.0~b1-1_all.deb
 
 # Fedora / RHEL / openSUSE
@@ -33,13 +34,14 @@ distribution archive).
 
 ```console
 $ cd packaging/arch
-$ updpkgsums       # replace the SKIP checksum before publishing
+$ updpkgsums       # refresh and review after changing the version
 $ makepkg -si
 ```
 
-The checked-in `PKGBUILD` has `sha256sums=('SKIP')` on purpose: release
-automation refreshes the checksum with `updpkgsums` before building. Never
-upload a `SKIP` checksum to the AUR.
+The checked-in checksum matches the upstream `v0.1.0b1` GitHub tag archive.
+Refresh and independently verify it whenever the version changes. The
+`REFHOUND_LOCAL_TARBALL` override computes a hash for a locally generated
+CI archive and must not be used as a substitute for verifying release source.
 
 ## Debian / Ubuntu
 
@@ -51,6 +53,19 @@ $ lintian ../refhound_0.1.0~b1-1_all.deb
 
 Debian versioning uses `~` for pre-releases, so upstream `0.1.0b1` becomes
 `0.1.0~b1`.
+
+Debian 13 ARM64 was locally built and smoke-tested with install, reinstall
+and removal. Ubuntu 24.04 ships older Typer, Pydantic and HTTPX than required;
+the native `.deb` is not supported there without compatible dependencies. Use
+the PyPI package in an isolated Python environment instead. A reinstall of
+the same version is not proof of an upgrade from an earlier version.
+
+## Homebrew
+
+The sibling `homebrew-tap` repository contains the draft formula and its CI.
+It points to the published beta and is not yet published or validated by an
+actual Homebrew installation. The tap README describes source, resources,
+testing and the manual update and publication process.
 
 ## Fedora / RHEL / openSUSE
 
@@ -69,8 +84,8 @@ RHEL streams are not supported by the current `requires-python` constraint.
 
 Publishing to AUR, OBS, COPR or distribution archives is intentionally not
 automated here: it needs maintainer accounts and signing keys. The release
-workflow produces the artifacts and checksums; the repository upload remains
-a manual, reviewed step.
+dry-run workflow builds artifacts and generates checksums without publishing
+them. Repository upload remains a future, reviewed step.
 
 See `docs/releasing.rst` for the PyPI trusted-publisher setup and the exact
 GitHub Actions workflow trigger.

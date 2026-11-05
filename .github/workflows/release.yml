@@ -1,13 +1,10 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      publish_pypi:
-        description: "Publish the built wheel and sdist to PyPI"
+      publish:
+        description: 'Publish after all gates and protected environment approvals'
         type: boolean
         default: false
 
@@ -19,62 +16,85 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  packages:
+    uses: ./.github/workflows/packages.yml
+
   build:
-    name: Build wheel and sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
-          python-version: "3.12"
-      - name: Verify tag matches the packaged version
-        if: github.ref_type == 'tag'
-        run: |
-          set -euo pipefail
-          version=$(python -c "import ast, pathlib; m = ast.parse(pathlib.Path('src/refhound/_version.py').read_text()); print(next(ast.literal_eval(n.value) for n in m.body if isinstance(n, ast.Assign) and any(getattr(t, 'id', '') == '__version__' for t in n.targets)))")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match src/refhound/_version.py ($version)" >&2
-            exit 1
-          fi
-      - run: uv build
-      - run: uv run --isolated --with twine twine check dist/*
-      - uses: actions/upload-artifact@v4
+          python-version: '3.12'
+      - name: Check version and publication ref
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: python scripts/release.py check
+      - run: uv build --out-dir dist
+      - run: uv run --no-project --with twine twine check dist/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-dist
           path: dist/*
+          if-no-files-found: error
 
   verify-install:
-    name: Install wheel in isolation (Python ${{ matrix.python }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.12', '3.13']
+        distribution: [wheel, sdist]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: ${{ matrix.python }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: python-dist
           path: dist
-      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound --version
-      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound --help
-      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl refhound scan --help
-      - run: uv run --isolated --python ${{ matrix.python }} --with dist/*.whl python -c "import refhound; print(refhound.__version__)"
+      - name: Install in an isolated environment and scan a synthetic repository
+        run: uv run --no-project --python ${{ matrix.python }} python scripts/verify_distribution.py dist ${{ matrix.distribution }}
 
-  packages:
-    name: Native packages
-    uses: ./.github/workflows/packages.yml
+  manifest:
+    needs: [ci, packages, build, verify-install]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: downloaded
+          pattern: '{python-dist,package-*}'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: '3.12'
+      - name: Generate Python environment SBOM
+        run: |
+          uv venv "$RUNNER_TEMP/sbom-env"
+          uv pip install --python "$RUNNER_TEMP/sbom-env/bin/python" downloaded/python-dist/*.whl
+          mkdir -p downloaded/sbom
+          uvx --from cyclonedx-bom==7.2.1 cyclonedx-py environment "$RUNNER_TEMP/sbom-env/bin/python" --output-file downloaded/sbom/python-sbom.cdx.json
+      - name: Create and verify flat release assets
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: python scripts/release.py manifest downloaded release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
 
   pypi:
-    name: Publish to PyPI
-    needs: [build, verify-install]
-    if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.publish_pypi) ||
-      (github.event_name == 'push' && vars.PUBLISH_TO_PYPI == 'true')
+    needs: [ci, packages, build, verify-install, manifest]
+    if: inputs.publish && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -83,53 +103,39 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: python-dist
           path: dist
-      - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: dist
           print-hash: true
-          # A re-run for an already published version must not fail.
-          skip-existing: true
 
   github-release:
-    name: GitHub release
-    needs: [build, verify-install, packages]
-    if: github.ref_type == 'tag'
+    needs: [pypi, manifest]
+    if: inputs.publish && github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: release-assets
           path: release-assets
-      - name: Generate checksums
-        run: |
-          set -euo pipefail
-          cd release-assets
-          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-          cat SHA256SUMS
-      - name: Create release with all artifacts
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: release-assets/*
+      - name: Verify checksums and create a new release
         env:
           GH_TOKEN: ${{ github.token }}
-          # This job does not check out the repository, so gh needs the repo name.
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find release-assets -type f)
-          case "$GITHUB_REF_NAME" in
-            *a[0-9]*|*b[0-9]*|*rc[0-9]*) flags=(--prerelease) ;;
-            *) flags=() ;;
-          esac
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "RefHound $GITHUB_REF_NAME" \
-              --generate-notes \
-              "${flags[@]}" \
-              "${assets[@]}"
-          fi
+          (cd release-assets && sha256sum -c SHA256SUMS)
+          gh release create "$RELEASE_TAG" --verify-tag --title "RefHound $RELEASE_TAG" --generate-notes release-assets/*

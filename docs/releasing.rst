@@ -1,104 +1,92 @@
-Releasing and PyPI publishing
-=============================
+Releasing and publication setup
+===============================
 
-The release pipeline lives in ``.github/workflows/release.yml`` and is named
-**Release** in the GitHub Actions UI.
+The ``Release`` workflow is manually dispatched. Its default is a dry run:
+it has no publishing job permissions unless ``publish`` is selected. A
+publication requires a stable version tag matching ``src/refhound/_version.py``,
+successful CI, native builds and isolated wheel/sdist tests. The source version
+is currently ``0.1.0b1``; a stable publication is deliberately rejected.
 
-Triggers
---------
+This is a release candidate pipeline, not evidence that the unexecuted GitHub
+matrix or native packages pass. Do not publish until all blockers in
+``RELEASE_READINESS.md`` have been closed and the dry run succeeds.
 
-There are two ways to start it:
+One-time GitHub setup (repository administrator)
+------------------------------------------------
 
-1. **Push a version tag.** A tag such as ``v0.1.0b1`` starts the workflow
-   automatically.
-2. **Run it manually.** Open *Actions -> Release -> Run workflow*, choose the
-   tag (or branch) in *Use workflow from*, and tick ``publish_pypi`` when the
-   build should be uploaded to PyPI.
+1. Commit and push the reviewed workflow to the default branch through your
+   normal review process. The workflow cannot be dispatched from the Actions
+   UI until the workflow file exists on the default branch.
+2. Under *Settings → Actions → General*, allow GitHub Actions and the pinned
+   actions used in the workflows. Do not give the default workflow token write
+   permission globally: the workflow requests job-specific permissions.
+3. Under *Settings → Environments*, create **pypi** and **release**. For
+   each, configure required reviewers, prevent self-review where available,
+   and restrict deployment refs to authorized release tags. Save the rules.
+   Verify that your GitHub plan and repository visibility actually enforce
+   these protection rules; environment names alone do not enforce approval.
+4. Under *Settings → Rules → Rulesets*, protect the release tag namespace
+   (for example ``v*``): restrict creation, update and deletion to designated
+   maintainers, and prevent overwriting tags. Protect the default branch and
+   require the applicable CI checks and review. Check the rules against your
+   GitHub plan and bypass permissions.
+5. Ensure the release commit is reviewed and reachable from the protected
+   default branch. Restrict who may dispatch workflows and approve deployment.
+   The workflow checks tag/version equality, but GitHub's administrative
+   tag and environment rules are essential to tag authorization.
 
-Pushing a tag only publishes to PyPI when the repository variable
-``PUBLISH_TO_PYPI`` is ``true``. Manual runs publish when the
-``publish_pypi`` input is checked. This keeps tag pushes safe until the PyPI
-trusted publisher exists.
+One-time PyPI setup (project owner)
+-----------------------------------
 
-One-time PyPI setup
--------------------
+1. Verify that you own or can register the ``refhound`` project on PyPI.
+2. At PyPI's *Publishing* page, configure a trusted publisher for the existing
+   project, or a pending trusted publisher if the project does not yet exist:
 
-PyPI uses trusted publishing (OIDC); no API token is stored in the repository.
+   * Owner: ``MichaelWeissDEV``
+   * Repository: ``RefHound``
+   * Workflow filename: ``release.yml``
+   * Environment: ``pypi``
 
-1. Sign in at https://pypi.org and open *Publishing*.
-2. Add a **pending publisher** (or add a publisher to an existing project)
-   with these exact values:
+3. Do not add a PyPI API token to GitHub. The publishing action uses OIDC.
+   Review the exact PyPI project ownership and publisher settings before
+   enabling them. These are external changes requiring explicit authorization.
 
-   .. list-table::
-      :header-rows: 1
+Dry run and release procedure
+-----------------------------
 
-      * - Field
-        - Value
-      * - PyPI project name
-        - ``refhound``
-      * - Owner
-        - ``MichaelWeissDEV``
-      * - Repository name
-        - ``RefHound``
-      * - Workflow name
-        - ``release.yml``
-      * - Environment name
-        - ``pypi``
+1. Resolve the readiness blockers, including Windows/native installation,
+   offline security, and Homebrew if it is part of the intended release.
+   Update ``_version.py``, the Arch and RPM recipes, Debian changelog and
+   release notes together. Run tests locally and review the final commit.
+2. Dispatch *Actions → Release → Run workflow* with ``publish`` **unchecked**.
+   Review the CI matrix, package builds, and the ``release-assets`` artifact,
+   including ``release-manifest.json``, ``SHA256SUMS`` and the Python runtime
+   environment SBOM. This run does not publish.
+3. Only after explicit release approval, create the matching protected tag
+   (for example ``v0.1.0``) on the reviewed commit and push it. No action here
+   creates tags. Dispatch the workflow **on that tag** with ``publish``
+   selected. A tag-triggered automatic publication does not exist.
+4. Review and approve the **pypi** deployment only after all gates pass.
+   PyPI uploads are immutable and existing files are not silently skipped.
+   After PyPI succeeds, approve the separate **release** environment to create
+   the GitHub release. Existing release assets are not overwritten.
+5. Verify the published distributions and checksums independently. The
+   provenance action attests the assembled release assets; it does not replace
+   independent verification of each native build. The SBOM describes the
+   resolved Python environment used to generate it, not each native package.
 
-3. In the GitHub repository open *Settings -> Environments* and create an
-   environment named ``pypi``. Protection rules (for example a required
-   reviewer) are optional but recommended.
-4. For automatic publishing on tags, open
-   *Settings -> Secrets and variables -> Actions -> Variables* and add
-   ``PUBLISH_TO_PYPI`` with the value ``true``.
+If PyPI succeeds but the GitHub release fails or is rejected, the version is
+already on PyPI: investigate and follow the recovery plan; do not assume an
+atomic rollback or rerun the entire PyPI upload. To remedy a defective PyPI
+artifact, consider yanking it, notify users, then build and review a new version.
+Never move an existing release tag or silently replace release assets.
 
-The publisher configuration is bound to the workflow filename and
-environment. Renaming ``release.yml`` or the ``pypi`` environment requires
-updating the PyPI publisher.
+Homebrew and native repositories
+--------------------------------
 
-Manual publish
---------------
-
-1. Open *Actions -> Release*.
-2. Click *Run workflow*.
-3. Select the tag ``v0.1.0b1`` (or another release tag) under
-   *Use workflow from*.
-4. Tick ``publish_pypi``.
-5. Click *Run workflow*.
-
-Select the **tag**, not a branch: PyPI is published in both cases, but the
-GitHub release with the native packages and ``SHA256SUMS`` is only created
-for tag refs. Re-running a workflow for an already published version is
-safe; the upload step skips files that already exist on PyPI.
-
-The job sequence is ``build`` -> ``verify-install`` (Python 3.12 and 3.13) ->
-``pypi``. Native packages run in parallel; the GitHub release is created only
-for tag pushes and includes every ``.deb``, ``.rpm``, ``.pkg.tar.zst``, the
-wheel, the sdist and ``SHA256SUMS``.
-
-Version and tag rules
----------------------
-
-The version has a single source of truth: ``src/refhound/_version.py``. For a
-tag push, the workflow fails before building if the tag and the version differ:
-
-.. code-block:: console
-
-   $ grep __version__ src/refhound/_version.py
-   __version__ = "0.1.0b1"
-   $ git tag v0.1.0b1
-
-PyPI versions are immutable. To retry after a failed upload or to publish a
-change, bump ``_version.py`` (for example ``0.1.0b2``), update the tag, and
-run again. Do not reuse a version that is already on PyPI.
-
-Installing a published pre-release
-----------------------------------
-
-Pre-releases are not selected by default:
-
-.. code-block:: console
-
-   $ pip install --pre refhound
-   $ pipx install --pre refhound
-   $ uv tool install --prerelease=allow refhound
+No Homebrew tap, AUR package, APT/DNF repository, OBS project or COPR project
+is configured by this workflow. A beta formula is prepared in the sibling
+``homebrew-tap`` repository but has not yet been installation-tested or
+published. A tested stable formula and repository integration remain open
+work. Set up any external repository, signing key or account only after
+separate approval.

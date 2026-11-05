@@ -10,21 +10,32 @@ Requirements
 Python package (beta)
 ----------------------
 
-RefHound is published on PyPI as ``refhound``. Until the first stable release,
-pre-releases must be requested explicitly:
+The first stable release is not yet approved. The published PyPI version is
+currently ``0.1.0b1``. Pin the beta explicitly so that pre-releases of all
+other dependencies are not selected inadvertently:
 
 .. code-block:: console
 
-   $ pipx install --pre refhound
-   $ uv tool install --prerelease=allow refhound
-   $ python -m pip install --pre refhound
+   $ pipx install 'refhound==0.1.0b1'
+   $ uv tool install 'refhound==0.1.0b1'
+   $ python -m pip install 'refhound==0.1.0b1'
 
-The same package is the source of truth for the native Linux packages.
+Use pip inside a virtual environment. Git must be installed separately and
+available on ``PATH``. Python dependencies are installed automatically.
+The pip and uv commands were tested on macOS ARM64; other platforms and pipx
+still need validation. Remove with ``uv tool uninstall refhound``,
+``pipx uninstall refhound`` or ``python -m pip uninstall refhound``.
+
+The Homebrew tap ``MichaelWeissDEV/homebrew-tap`` is being prepared locally;
+it is not yet published or installation-tested. See its README for the
+maintainer process. Do not treat it as a stable installation source yet.
 
 Native Linux packages
 ---------------------
 
-Release artifacts are attached to each GitHub release:
+Native packages are planned; availability and the exact filenames must be
+verified for the specific release. The following are example filenames, not
+verified download links:
 
 .. code-block:: console
 
@@ -42,6 +53,11 @@ These files install the tool, but they do not configure an APT, DNF or Zypper
 repository. Automatic updates require a signed, indexed repository or an
 entry in the distribution archive. See ``packaging/README.md`` for build
 instructions, checksums and repository caveats.
+
+Debian 13 ARM64 build, installation, scan, reinstall and removal were tested
+locally for the beta. Ubuntu 24.04's distribution-provided Pydantic, Typer and
+HTTPX are too old for this package; its native package is **not supported**
+without compatible dependencies. Use an isolated Python installation instead.
 
 Arch Linux users can also build from the provided ``PKGBUILD``:
 
@@ -79,6 +95,9 @@ never modified:
 
    $ refhound scan https://github.com/example/repo.git
 
-Use ``--offline`` to forbid network access. RefHound then fails unless the
+``--offline`` rejects explicit network acquisition. Its behavior with Git
+partial clones and other implicit Git network access has not been fully
+validated, so do not rely on it as a network isolation boundary; use OS-level
+network isolation where required. RefHound fails unless the
 mirror is already cached, and it rejects combinations such as
 ``--offline --unshallow`` that would require a fetch.

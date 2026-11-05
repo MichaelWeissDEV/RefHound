@@ -24,15 +24,39 @@ IDs or validate/reuse found credentials.
 
 Full documentation is available at <https://refhound.readthedocs.io/>.
 
+**Release status:** the current source version is `0.1.0b1`; stable `0.1.0`
+and native installation paths are not yet release-validated. See
+[`RELEASE_READINESS.md`](RELEASE_READINESS.md). Do not rely on `--offline` as
+a network isolation boundary for partial clones until independently verified;
+use OS-level network isolation when required.
+
 ## Installation
+
+The published PyPI version is currently the **0.1.0b1 beta**. Python 3.12+
+and a separately installed `git` executable on `PATH` are required. Python
+dependencies are installed automatically. For an isolated CLI installation:
+
+```sh
+uv tool install 'refhound==0.1.0b1'
+# alternatively, in a Python 3.12+ virtual environment:
+python -m pip install 'refhound==0.1.0b1'
+```
+
+Pinning the beta explicitly avoids enabling pre-releases for all dependencies.
+Once a stable version has actually been published, `uv tool install refhound`
+or `python -m pip install refhound` can select it normally. To remove the
+tool, use `uv tool uninstall refhound` or `python -m pip uninstall refhound`.
+Use `uv tool upgrade refhound` or `python -m pip install --upgrade refhound` to
+update; explicitly pinned beta versions may need to be replaced first.
+
+The Homebrew tap is being prepared separately and is not yet published or
+installation-tested; see [`packaging/README.md`](packaging/README.md).
 
 During development:
 
 ```
 uv sync --all-extras
 ```
-
-(Once packaged: `pipx install refhound`.)
 
 ## Quick start
 
